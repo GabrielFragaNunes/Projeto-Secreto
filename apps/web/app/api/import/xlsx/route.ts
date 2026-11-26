@@ -1,6 +1,7 @@
 import { engineApiUrl, readEngineError } from '@/lib/engine-api';
 import { getSupabaseRequestContext } from '@/lib/supabase/request';
-import { parseUserPosition, toPositionRow, type UserPositionInput } from '@/lib/supabase/positions';
+import { parseUserPosition, type UserPositionInput } from '@/lib/supabase/positions';
+import { persistUserPositions } from '@/lib/supabase/persist-positions';
 import { hasAcceptedCurrentTerms } from '@/lib/supabase/terms-server';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -93,34 +94,12 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Confirme os termos de primeiro acesso antes de importar posições.' }, { status: 403 });
   }
 
-  const { data: existingPositions, error: existingError } = await context.supabase
-    .from('user_positions')
-    .select('ticker, habilitado_aporte, preco_teto_manual, nota_pessoal')
-    .eq('user_id', context.user.id)
-    .in('ticker', positions.map((position) => position.ticker));
-  if (existingError) {
-    console.error('Falha ao carregar regras manuais antes da importação:', existingError.message);
-    return Response.json({ error: 'Não foi possível preservar as regras manuais das posições.' }, { status: 500 });
+  const persisted = await persistUserPositions(context.supabase, context.user, positions);
+  if (persisted.error) {
+    console.error('Falha ao persistir posições importadas:', persisted.error);
+    return Response.json({ error: 'Não foi possível salvar as posições importadas.' }, { status: 500 });
   }
-  const existingByTicker = new Map((existingPositions ?? []).map((position) => [position.ticker, position]));
-  const positionsWithMetadata = positions.map((position) => {
-    const previous = existingByTicker.get(position.ticker);
-    return {
-      ...position,
-      habilitado_aporte: previous?.habilitado_aporte ?? position.habilitado_aporte,
-      preco_teto_manual: previous?.preco_teto_manual ?? position.preco_teto_manual,
-      nota_pessoal: previous?.nota_pessoal ?? position.nota_pessoal,
-    };
-  });
-  const rows = positionsWithMetadata.map((position) => toPositionRow(position, context.user));
-  const { error: saveError } = await context.supabase
-    .from('user_positions')
-    .upsert(rows, { onConflict: 'user_id,ticker' });
-  if (saveError) {
-    console.error('Falha ao salvar posições importadas:', saveError.message);
-    return Response.json({ error: 'A planilha foi lida, mas não foi possível salvar as posições.' }, { status: 500 });
-  }
-  return Response.json({ ...imported, positions: positionsWithMetadata, persistence: { enabled: true } });
+  return Response.json({ ...imported, positions: persisted.positions, persistence: { enabled: true } });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

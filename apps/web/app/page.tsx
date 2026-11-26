@@ -228,10 +228,6 @@ export default function PortfolioManager() {
       }
 
       await logToTerminal(`📊 Total de linhas cruas: ${rows.length}`);
-      if (rows.length > 0) {
-        await logToTerminal(`🔍 Exemplo da Linha 1 (HEADERS):`);
-        await logToTerminal(JSON.stringify(rows[0])); // Mostra as chaves exatas
-      }
 
       setImportProgress({ current: 0, total: rows.length });
       const newItems: PortfolioItem[] = [];
@@ -251,10 +247,10 @@ export default function PortfolioManager() {
           .map(name => fields.get(normalizeHeader(name)))
           .find(value => value !== undefined && value !== null && value !== '');
         const tickerRaw = getField('ativo', 'ticker', 'código', 'codigo', 'papel', 'negociação', 'produto');
-        const qtyRaw = getField('quantidade', 'qtde', 'posição', 'posicao', 'total', 'disponível', 'disponivel');
+        const qtyRaw = getField('quantidade', 'quantity', 'qtde', 'posição', 'posicao', 'total', 'disponível', 'disponivel');
 
         if (tickerRaw === undefined || tickerRaw === null || qtyRaw === undefined || qtyRaw === null) {
-          if (i < 3) await logToTerminal(`⚠️ Linha ${i+1} Pulada: Não achei colunas. Chaves encontradas: ${keys.join(', ')}`);
+          if (i < 3) await logToTerminal(`⚠️ Linha ${i + 1} ignorada: faltam ticker ou quantidade.`);
           continue;
         }
 
@@ -299,6 +295,10 @@ export default function PortfolioManager() {
           category, averagePrice, currentPatrimony,
           magicNumber, missingShares, investmentNeeded, finalPatrimony, isSelfSustain, monthlyIncome
         });
+      }
+
+      if (newItems.length === 0) {
+        throw new Error('Nenhuma posição válida foi encontrada. Verifique se o JSON contém ticker e quantity.');
       }
 
       updateStoredPortfolio(prev => [...prev, ...newItems]);

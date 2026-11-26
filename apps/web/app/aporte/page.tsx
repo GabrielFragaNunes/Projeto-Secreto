@@ -22,6 +22,10 @@ type ImportedPortfolio = {
   resumo_por_classe: Record<string, number>;
   persistence?: { enabled: boolean };
 };
+type PositionImportResult = {
+  positions: unknown[];
+  persistence: { enabled: boolean };
+};
 type SimulationHistoryItem = {
   id: string;
   created_at: string;
@@ -212,20 +216,46 @@ export default function ContributionsPage() {
     setFileBusy(true);
 
     try {
+      const isSnowballJson = file.name.toLowerCase().endsWith('.json');
       const data = new FormData();
       data.append('file', file);
-      const response = await fetch('/api/import/xlsx', { method: 'POST', body: data });
+      const response = await fetch(
+        isSnowballJson ? '/api/import/json' : '/api/import/xlsx',
+        { method: 'POST', body: data },
+      );
       const payload: unknown = await response.json();
-      if (!response.ok || !isImportedPortfolio(payload)) {
+      if (!response.ok) {
         throw new Error(readError(payload, 'Não foi possível importar a planilha.'));
       }
-      setLoadedPortfolio(payload);
-      setPositions(payload.positions);
-      const persisted = isRecord(payload.persistence) && payload.persistence.enabled === true;
-      setPersistenceEnabled(persisted);
-      setMessage(persisted
-        ? `${payload.positions.length} ativos carregados e salvos na sua conta.`
-        : `${payload.positions.length} ativos carregados apenas nesta sessão; Supabase não está configurado.`);
+      if (isSnowballJson) {
+        if (!isPositionImportResult(payload)) {
+          throw new Error('O arquivo JSON não tem o formato exportado pela Carteira Snowball.');
+        }
+        const parsedPositions = payload.positions.map(parsePortfolioPosition);
+        if (parsedPositions.some((position) => position === null)) {
+          throw new Error('O arquivo JSON contém uma posição inválida.');
+        }
+        const importedPositions = parsedPositions.filter(
+          (position): position is PortfolioPosition => position !== null,
+        );
+        setLoadedPortfolio(null);
+        setPositions(importedPositions);
+        setPersistenceEnabled(payload.persistence.enabled);
+        setMessage(payload.persistence.enabled
+          ? `${importedPositions.length} ativos JSON carregados e salvos na sua conta.`
+          : `${importedPositions.length} ativos JSON carregados apenas nesta sessão; Supabase não está configurado.`);
+      } else {
+        if (!isImportedPortfolio(payload)) {
+          throw new Error('O motor retornou um formato inesperado para a planilha.');
+        }
+        setLoadedPortfolio(payload);
+        setPositions(payload.positions);
+        const persisted = isRecord(payload.persistence) && payload.persistence.enabled === true;
+        setPersistenceEnabled(persisted);
+        setMessage(persisted
+          ? `${payload.positions.length} ativos carregados e salvos na sua conta.`
+          : `${payload.positions.length} ativos carregados apenas nesta sessão; Supabase não está configurado.`);
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Falha ao importar a planilha.');
     } finally {
@@ -414,13 +444,13 @@ export default function ContributionsPage() {
       </header>
 
       <section className="rounded-2xl border border-slate-700 bg-slate-900 p-6">
-        <h2 className="text-xl font-semibold">Importar planilha B3</h2>
-        <p className="mt-2 text-sm text-slate-300">Selecione uma planilha XLSX de até 5 MB para carregar posições.</p>
+        <h2 className="text-xl font-semibold">Importar posições</h2>
+        <p className="mt-2 text-sm text-slate-300">Selecione uma planilha XLSX da B3 ou um JSON exportado pela Carteira Snowball, com até 5 MB.</p>
         <label className="mt-4 inline-flex cursor-pointer items-center rounded-lg bg-slate-700 px-4 py-2 font-medium hover:bg-slate-600">
-          {fileBusy ? 'Importando…' : 'Selecionar arquivo XLSX'}
+          {fileBusy ? 'Importando…' : 'Selecionar XLSX ou JSON'}
           <input
             type="file"
-            accept=".xlsx"
+            accept=".xlsx,.json,application/json"
             onChange={importFile}
             disabled={fileBusy}
             className="sr-only"
@@ -786,6 +816,13 @@ function isImportedPortfolio(value: unknown): value is ImportedPortfolio {
     && Array.isArray(value.positions)
     && typeof value.patrimonio_total === 'number'
     && isRecord(value.resumo_por_classe);
+}
+
+function isPositionImportResult(value: unknown): value is PositionImportResult {
+  return isRecord(value)
+    && Array.isArray(value.positions)
+    && isRecord(value.persistence)
+    && typeof value.persistence.enabled === 'boolean';
 }
 
 function parsePortfolioPosition(value: unknown): PortfolioPosition | null {
