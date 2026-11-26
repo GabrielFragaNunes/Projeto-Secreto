@@ -104,6 +104,13 @@
             "caixa_brl": {
               "$ref": "#/$defs/valorMonetario"
             },
+            "p_vp": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
             "rendimentos_distribuidos_cota_brl": {
               "$ref": "#/$defs/valorMonetario"
             },
@@ -138,6 +145,28 @@
             "null"
           ],
           "minimum": 0
+        },
+        "maior_inquilino": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "nome",
+            "concentracao_pct"
+          ],
+          "properties": {
+            "nome": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "concentracao_pct": {
+              "$ref": "#/$defs/percentual"
+            }
+          }
         },
         "numero_imoveis": {
           "type": [

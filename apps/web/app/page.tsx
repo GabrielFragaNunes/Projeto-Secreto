@@ -6,7 +6,7 @@ import { formatCurrency } from '@/lib/utils';
 import { fetchStockData, logToTerminal } from '@/app/actions'; // Importa o logger
 import { 
   TrendingUp, PlusCircle, Trash2, Wallet, CheckCircle2, 
-  Coins, Search, Loader2, Info, Upload, FileSpreadsheet, Pencil, Check, X, Download
+  Search, Loader2, Upload, FileSpreadsheet, Pencil, Check, X, Download
 } from 'lucide-react';
 import { PortfolioItem } from '@/types';
 
@@ -15,7 +15,6 @@ export default function PortfolioManager() {
   const [assetName, setAssetName] = useState('');
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState({ ticker: '', price: '', dividend: '', quantity: '' });
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -207,12 +206,10 @@ export default function PortfolioManager() {
         await logToTerminal(JSON.stringify(rows[0])); // Mostra as chaves exatas
       }
 
-      setImportProgress({ current: 0, total: rows.length });
       const newItems: PortfolioItem[] = [];
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        setImportProgress({ current: i + 1, total: rows.length });
 
         if (!isRecord(row)) continue;
 

@@ -103,6 +103,11 @@
           "minimum": 0,
           "maximum": 100
         },
+        "vacancia_financeira_amarelo_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
         "vacancia_financeira_max_pct": {
           "type": "number",
           "minimum": 0,
