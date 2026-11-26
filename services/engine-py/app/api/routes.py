@@ -9,7 +9,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.ai.fii_extractor import (
     FiiReportExtraction,
@@ -17,15 +17,34 @@ from app.ai.fii_extractor import (
     GeminiExtractionError,
     extract_fii_report,
 )
+from app.ai.macro_explainer import (
+    MacroExplainRequest,
+    MacroExplanation,
+    MacroExplanationError,
+    MacroGeminiApiKeyMissingError,
+    explain_macro,
+)
 from app.domain.fii_risk import (
     FiiSemaphoreAssessment,
     SemaphoreThresholds,
     avaliar_semaforo_fii,
 )
+from app.domain.rebalance import (
+    SimulationRequest,
+    SimulationResult,
+    simulate_contribution,
+)
+from app.integrations.bcb_olinda import (
+    BCBFocusUnavailableError,
+    MacroFocusSnapshot,
+    get_macro_focus_snapshot,
+)
+from app.parsers.b3_xlsx import B3XlsxParseError, parse_b3_xlsx
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 MAX_PDF_SIZE_BYTES = 20 * 1024 * 1024
+MAX_XLSX_SIZE_BYTES = 5 * 1024 * 1024
 
 
 class FiiReportResponse(FiiReportExtraction):
@@ -132,3 +151,94 @@ async def extrair_relatorio_fii(
         }
     )
     return DecimalJSONResponse(content=payload)
+
+
+@router.get(
+    "/v1/macro/focus",
+    response_model=MacroFocusSnapshot,
+    response_class=DecimalJSONResponse,
+)
+async def obter_focus_macro() -> Response:
+    try:
+        snapshot = await run_in_threadpool(get_macro_focus_snapshot)
+    except BCBFocusUnavailableError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="As expectativas do Banco Central estão temporariamente indisponíveis.",
+        ) from error
+    return DecimalJSONResponse(content=snapshot)
+
+
+@router.post(
+    "/v1/macro/explicar",
+    response_model=MacroExplanation,
+)
+async def explicar_impacto_macro(payload: MacroExplainRequest) -> MacroExplanation:
+    snapshot = payload.snapshot
+    if snapshot is None:
+        try:
+            snapshot = await run_in_threadpool(get_macro_focus_snapshot)
+        except BCBFocusUnavailableError as error:
+            raise HTTPException(
+                status_code=503,
+                detail="As expectativas do Banco Central estão temporariamente indisponíveis.",
+            ) from error
+
+    try:
+        return await run_in_threadpool(
+            explain_macro,
+            snapshot,
+            payload.distribuicao_por_classe,
+        )
+    except MacroGeminiApiKeyMissingError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except APIError as error:
+        logger.exception("Falha na API Gemini ao gerar leitura macroeconômica.")
+        raise HTTPException(
+            status_code=502,
+            detail="O serviço de explicação macroeconômica não concluiu o processamento.",
+        ) from error
+    except MacroExplanationError as error:
+        logger.exception("Resposta Gemini inválida para leitura macroeconômica.")
+        raise HTTPException(
+            status_code=502,
+            detail="A resposta do serviço não corresponde ao contrato educativo.",
+        ) from error
+
+
+@router.post(
+    "/v1/import/xlsx",
+    response_class=DecimalJSONResponse,
+)
+async def importar_planilha_b3(file: UploadFile = File(...)) -> Response:
+    filename = file.filename or ""
+    if not filename.lower().endswith(".xlsx"):
+        raise HTTPException(
+            status_code=415,
+            detail="O arquivo enviado deve usar a extensão .xlsx.",
+        )
+    if file.content_type not in (
+        None,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/octet-stream",
+    ):
+        raise HTTPException(status_code=415, detail="O tipo de conteúdo deve ser XLSX.")
+
+    content = await file.read(MAX_XLSX_SIZE_BYTES + 1)
+    if len(content) > MAX_XLSX_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="A planilha excede o limite de 5 MB.")
+    try:
+        result = await run_in_threadpool(parse_b3_xlsx, content)
+    except B3XlsxParseError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return DecimalJSONResponse(content=result)
+
+
+@router.post(
+    "/v1/aporte/simular",
+    response_model=SimulationResult,
+    response_class=DecimalJSONResponse,
+)
+async def simular_aporte(payload: SimulationRequest) -> Response:
+    result = simulate_contribution(payload)
+    return DecimalJSONResponse(content=result)

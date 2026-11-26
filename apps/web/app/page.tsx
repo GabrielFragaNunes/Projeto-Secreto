@@ -1,25 +1,29 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import * as XLSX from 'xlsx';
 import { formatCurrency } from '@/lib/utils';
 import { fetchStockData, logToTerminal } from '@/app/actions'; // Importa o logger
+import { updateStoredPortfolio, useStoredPortfolio } from '@/lib/portfolio-storage';
 import { 
   TrendingUp, PlusCircle, Trash2, Wallet, CheckCircle2, 
-  Coins, Search, Loader2, Info, Upload, FileSpreadsheet, Pencil, Check, X, Download
+  Search, Loader2, Upload, FileSpreadsheet, Pencil, Check, X, Download
 } from 'lucide-react';
 import { PortfolioItem } from '@/types';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 export default function PortfolioManager() {
   const [form, setForm] = useState({ ticker: '', price: '', dividend: '', quantity: '' });
   const [assetName, setAssetName] = useState('');
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+  const [, setImportProgress] = useState({ current: 0, total: 0 });
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState({ ticker: '', price: '', dividend: '', quantity: '' });
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
+  const portfolio = useStoredPortfolio();
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -43,9 +47,6 @@ export default function PortfolioManager() {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
-
-  const isRecord = (value: unknown): value is Record<string, unknown> =>
-    typeof value === 'object' && value !== null && !Array.isArray(value);
 
   const handleSearchTicker = async () => {
     const ticker = form.ticker.trim();
@@ -93,13 +94,13 @@ export default function PortfolioManager() {
       id: crypto.randomUUID(), ticker, price, dividend, quantity,
       magicNumber, missingShares, investmentNeeded, finalPatrimony, isSelfSustain, monthlyIncome
     };
-    setPortfolio([...portfolio, newItem]);
+    updateStoredPortfolio(current => [...current, newItem]);
     setForm({ ticker: '', price: '', dividend: '', quantity: '' });
     setAssetName('');
   };
 
   const handleRemove = (id: string) => {
-    setPortfolio(portfolio.filter(item => item.id !== id));
+    updateStoredPortfolio(current => current.filter(item => item.id !== id));
   };
 
   const handleStartItemEdit = (item: PortfolioItem) => {
@@ -135,7 +136,7 @@ export default function PortfolioManager() {
     const isSelfSustain = quantity >= magicNumber;
     const monthlyIncome = quantity * dividend;
 
-    setPortfolio(currentPortfolio => currentPortfolio.map(currentItem => (
+    updateStoredPortfolio(currentPortfolio => currentPortfolio.map(currentItem => (
       currentItem.id !== item.id
         ? currentItem
         : {
@@ -193,12 +194,37 @@ export default function PortfolioManager() {
         rows = Array.isArray(parsed) ? parsed : [parsed];
         await logToTerminal('📄 Arquivo JSON carregado.');
       } else {
-        const data = await file.arrayBuffer();
-        const workbook = XLSX.read(data);
-        for (const sheetName of workbook.SheetNames) {
-          await logToTerminal(`📑 Aba Selecionada: ${sheetName}`);
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await fetch('/api/import/xlsx', { method: 'POST', body: formData });
+        const imported: unknown = await response.json();
+        if (!response.ok) {
+          const message = isRecord(imported) && typeof imported.error === 'string'
+            ? imported.error
+            : 'Não foi possível importar a planilha.';
+          throw new Error(message);
         }
-        rows = workbook.SheetNames.flatMap(sheetName => XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]));
+        if (!isRecord(imported) || !Array.isArray(imported.positions)) {
+          throw new Error('O motor retornou um formato inesperado para a planilha.');
+        }
+        rows = imported.positions.map((position) => {
+          if (
+            !isRecord(position)
+            || typeof position.ticker !== 'string'
+            || typeof position.quantidade !== 'number'
+            || typeof position.preco_atual !== 'number'
+          ) {
+            throw new Error('A planilha contém uma posição em formato inválido.');
+          }
+          return {
+            ticker: position.ticker,
+            quantidade: position.quantidade,
+            'preço atual': position.preco_atual,
+            'preço médio': typeof position.preco_medio === 'number' ? position.preco_medio : 0,
+            categoria: typeof position.classe === 'string' ? position.classe : '',
+          };
+        });
+        await logToTerminal('📄 Planilha validada e processada pelo motor.');
       }
 
       await logToTerminal(`📊 Total de linhas cruas: ${rows.length}`);
@@ -275,14 +301,14 @@ export default function PortfolioManager() {
         });
       }
 
-      setPortfolio(prev => [...prev, ...newItems]);
+      updateStoredPortfolio(prev => [...prev, ...newItems]);
       await logToTerminal(`🚀 Importação Finalizada: ${newItems.length} ativos importados.`);
       alert(`Importação ${isJson ? 'JSON' : 'Excel'} concluída! ${newItems.length} ativos processados.`);
 
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Erro desconhecido.';
       await logToTerminal(`❌ Erro Fatal: ${message}`);
-      alert(`Erro ao ler o arquivo ${file.name.toLowerCase().endsWith('.json') ? 'JSON' : 'Excel'}.`);
+      alert(message);
     } finally {
       setIsImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
