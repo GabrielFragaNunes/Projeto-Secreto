@@ -1,0 +1,33 @@
+{
+  "PVBI11": {
+    "ticker": "PVBI11",
+    "competencia": "2026-09",
+    "gestora": "Gestora anonimizada",
+    "hash_pdf_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "indicadores_financeiros": {
+      "pagina_fonte": 6,
+      "dados": {
+        "p_vp": 0.63
+      }
+    },
+    "indicadores_imobiliarios": {
+      "pagina_fonte": 6,
+      "vacancia_fisica_pct": null,
+      "vacancia_financeira_pct": 30.4,
+      "maior_inquilino": {
+        "nome": "Inquilino anonimizado",
+        "concentracao_pct": 34.0
+      }
+    },
+    "alavancagem": {
+      "pagina_fonte": 6,
+      "indicada": true,
+      "percentual_sobre_patrimonio": 0.0
+    },
+    "guidance_dividendos": {
+      "pagina_fonte": 6,
+      "descricao": null
+    },
+    "fatos_relevantes": []
+  }
+}

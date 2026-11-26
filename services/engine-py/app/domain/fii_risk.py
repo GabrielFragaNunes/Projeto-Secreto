@@ -3,17 +3,19 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.numeric import StrictDecimal
+
 
 class SemaphoreThresholds(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    vacancia_fisica_max_pct: Decimal = Field(
+    vacancia_fisica_max_pct: StrictDecimal = Field(
         default=Decimal("25"), ge=Decimal("0"), le=Decimal("100")
     )
-    vacancia_financeira_max_pct: Decimal = Field(
+    vacancia_financeira_max_pct: StrictDecimal = Field(
         default=Decimal("25"), ge=Decimal("0"), le=Decimal("100")
     )
-    alavancagem_max_pct: Decimal | None = Field(default=None, ge=Decimal("0"))
+    alavancagem_max_pct: StrictDecimal | None = Field(default=None, ge=Decimal("0"))
 
 
 class FiiSemaphoreAssessment(BaseModel):

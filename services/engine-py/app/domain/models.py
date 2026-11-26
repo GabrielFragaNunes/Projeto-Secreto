@@ -3,7 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.domain.fii_risk import FiiSemaphoreAssessment
+from app.domain.fii_risk import FiiSemaphoreAssessment, SemaphoreThresholds
+from app.domain.numeric import StrictDecimal
 
 AssetClass = Literal["FIIs", "Ações", "Tesouro", "ETF", "FIAGRO", "Renda Fixa"]
 Semaphore = Literal["VERDE", "AMARELO", "VERMELHO"]
@@ -15,11 +16,13 @@ class PositionItem(BaseModel):
     ticker: str = Field(min_length=1)
     classe: AssetClass
     segmento: str = Field(default="Outros", min_length=1)
-    quantidade: Decimal = Field(ge=Decimal("0"))
-    preco_medio: Decimal = Field(ge=Decimal("0"))
-    preco_atual: Decimal = Field(ge=Decimal("0"))
+    quantidade: StrictDecimal = Field(ge=Decimal("0"))
+    preco_medio: StrictDecimal = Field(ge=Decimal("0"))
+    preco_atual: StrictDecimal = Field(ge=Decimal("0"))
     habilitado_aporte: bool = True
-    preco_teto_manual: Decimal | None = Field(default=None, ge=Decimal("0"))
+    preco_teto_manual: StrictDecimal | None = Field(
+        default=None, ge=Decimal("0")
+    )
 
 
 class ImportXlsxResult(BaseModel):
@@ -67,37 +70,99 @@ class BlockedAssetInfo(BaseModel):
     motivos: list[str]
 
 
+def validate_allocation_targets(
+    metas_classe: dict[str, Decimal], metas_segmento: dict[str, Decimal]
+) -> None:
+    if not metas_classe:
+        raise ValueError("metas_classe deve conter metas configuradas")
+    if any(value < 0 or value > 1 for value in metas_classe.values()):
+        raise ValueError("metas_classe deve usar proporções entre 0 e 1")
+    if abs(sum(metas_classe.values(), Decimal("0")) - Decimal("1")) > Decimal(
+        "0.0001"
+    ):
+        raise ValueError("a soma de metas_classe deve ser 1.00")
+    if any(value < 0 or value > 1 for value in metas_segmento.values()):
+        raise ValueError("metas_segmento deve usar proporções entre 0 e 1")
+
+
+class ConfiguredAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    ticker: str = Field(min_length=1)
+    classe: str = Field(min_length=1)
+    segmento: str | None = None
+    meta_alocacao_pct: StrictDecimal | None = Field(
+        default=None, ge=Decimal("0"), le=Decimal("100")
+    )
+    elegivel: bool | None = None
+
+
+class FiscalPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    habilitado: bool
+    prejuizo_compensavel_brl: StrictDecimal = Field(ge=Decimal("0"))
+    observacoes: str | None = None
+
+
+class RebalancePolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    metas_classe: dict[str, StrictDecimal]
+    metas_segmento: dict[str, StrictDecimal] = Field(default_factory=dict)
+    gatilhos_semaforo_fii: SemaphoreThresholds = Field(
+        default_factory=SemaphoreThresholds
+    )
+    ativos_bloqueados_manualmente: set[str] = Field(default_factory=set)
+    ativos_configurados: list[ConfiguredAsset] = Field(default_factory=list)
+    acao_semaforo_vermelho: Literal["BLOQUEAR_APORTE", "PERMITIR_APORTE"] = (
+        "BLOQUEAR_APORTE"
+    )
+    fator_reducao_amarelo: StrictDecimal = Field(
+        default=Decimal("0.5"), ge=Decimal("0"), le=Decimal("1")
+    )
+    minimo_tesouro_direto: StrictDecimal = Field(
+        default=Decimal("30.00"), gt=Decimal("0")
+    )
+    meta_patrimonial_brl: StrictDecimal | None = Field(
+        default=None, ge=Decimal("0")
+    )
+    aporte_mensal_padrao_brl: StrictDecimal | None = Field(
+        default=None, ge=Decimal("0")
+    )
+    filtros_quantitativos_acoes: dict[str, StrictDecimal] = Field(
+        default_factory=dict
+    )
+    controle_fiscal_ir: FiscalPolicy | None = None
+
+    @model_validator(mode="after")
+    def validate_targets(self) -> "RebalancePolicy":
+        validate_allocation_targets(self.metas_classe, self.metas_segmento)
+        return self
+
+
 class RebalanceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     positions: list[PositionItem]
-    aporte_disponivel: Decimal = Field(ge=Decimal("0"))
-    metas_classe: dict[str, Decimal]
-    metas_segmento: dict[str, Decimal] = Field(default_factory=dict)
+    aporte_disponivel: StrictDecimal = Field(ge=Decimal("0"))
+    metas_classe: dict[str, StrictDecimal]
+    metas_segmento: dict[str, StrictDecimal] = Field(default_factory=dict)
     ativos_bloqueados_manualmente: set[str] = Field(default_factory=set)
     semaforos: dict[str, FiiSemaphoreAssessment] = Field(default_factory=dict)
     acao_semaforo_vermelho: Literal["BLOQUEAR_APORTE", "PERMITIR_APORTE"] = (
         "BLOQUEAR_APORTE"
     )
-    fator_reducao_amarelo: Decimal = Field(
+    fator_reducao_amarelo: StrictDecimal = Field(
         default=Decimal("0.5"), ge=Decimal("0"), le=Decimal("1")
     )
-    minimo_tesouro_direto: Decimal = Field(
+    minimo_tesouro_direto: StrictDecimal = Field(
         default=Decimal("30.00"), gt=Decimal("0")
     )
 
     @model_validator(mode="after")
     def validate_allocation_targets(self) -> "RebalanceRequest":
-        if not self.metas_classe:
-            raise ValueError("metas_classe deve conter metas configuradas")
-        if any(value < 0 or value > 1 for value in self.metas_classe.values()):
-            raise ValueError("metas_classe deve usar proporções entre 0 e 1")
-        if abs(sum(self.metas_classe.values(), Decimal("0")) - Decimal("1")) > Decimal(
-            "0.0001"
-        ):
-            raise ValueError("a soma de metas_classe deve ser 1.00")
-        if any(value < 0 or value > 1 for value in self.metas_segmento.values()):
-            raise ValueError("metas_segmento deve usar proporções entre 0 e 1")
+        validate_allocation_targets(self.metas_classe, self.metas_segmento)
 
         tickers = [position.ticker for position in self.positions]
         if len(tickers) != len(set(tickers)):

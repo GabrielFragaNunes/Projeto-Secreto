@@ -12,8 +12,17 @@ from typing import Annotated, Any
 from google import genai
 from google.genai.errors import APIError
 from google.genai import types
-from pydantic import BaseModel, ConfigDict, Field, GetJsonSchemaHandler, ValidationError
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    GetJsonSchemaHandler,
+    ValidationError,
+)
 from pydantic_core import CoreSchema
+
+from app.domain.numeric import parse_json_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +61,9 @@ class _DecimalJsonNumber:
         return numeric_schema
 
 
-DecimalNumber = Annotated[Decimal, _DecimalJsonNumber()]
+DecimalNumber = Annotated[
+    Decimal, _DecimalJsonNumber(), BeforeValidator(parse_json_decimal)
+]
 Percentual = Annotated[
     DecimalNumber | None,
     Field(

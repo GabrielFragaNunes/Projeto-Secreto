@@ -1,9 +1,14 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 import pytest
 from pydantic import ValidationError
 
-from app.domain.fii_risk import FiiSemaphoreAssessment
+from app.ai.fii_extractor import FiiReportExtraction
+from app.domain.fii_risk import (
+    FiiSemaphoreAssessment,
+    SemaphoreThresholds,
+    avaliar_semaforo_fii,
+)
 from app.domain.models import PositionItem, RebalanceRequest
 from app.domain.rebalance import calcular_rebalanceamento, segment_meta_key
 
@@ -67,6 +72,164 @@ def test_class_and_asset_deficits_allocate_proportionally_with_decimal_cents() -
     assert result.troco_residual == Decimal("0.00")
     assert result.total_alocado + result.troco_residual == result.aporte_disponivel
     assert result.eficiencia_pct == Decimal("100.00")
+    assert all(order.pm_projetado == Decimal("9.33") for order in result.ordens)
+
+
+def test_reference_portfolio_blocks_pvbi_and_tgar_and_preserves_aporte(
+    sample_portfolio_payload: dict[str, object],
+    sample_positions: list[PositionItem],
+    pvbi_facts: dict[str, FiiReportExtraction],
+) -> None:
+    report = pvbi_facts["PVBI11"]
+    thresholds = SemaphoreThresholds(
+        vacancia_fisica_max_pct=Decimal("25"),
+        vacancia_financeira_max_pct=Decimal("25"),
+        alavancagem_max_pct=Decimal("5"),
+    )
+    assessment = avaliar_semaforo_fii(
+        vacancia_fisica_pct=report.indicadores_imobiliarios.vacancia_fisica_pct,
+        vacancia_financeira_pct=report.indicadores_imobiliarios.vacancia_financeira_pct,
+        pagina_indicadores_imobiliarios=(
+            report.indicadores_imobiliarios.pagina_fonte
+        ),
+        alavancagem_indicada=report.alavancagem.indicada,
+        alavancagem_pct=report.alavancagem.percentual_sobre_patrimonio,
+        pagina_alavancagem=report.alavancagem.pagina_fonte,
+        thresholds=thresholds,
+    )
+    result = calcular_rebalanceamento(
+        request(
+            sample_positions,
+            "1000.00",
+            metas_classe={
+                "FIIs": Decimal("0.50"),
+                "Ações": Decimal("0.32"),
+                "Tesouro": Decimal("0.15"),
+                "ETF": Decimal("0.02"),
+                "FIAGRO": Decimal("0.01"),
+            },
+            semaforos={"PVBI11": assessment},
+        )
+    )
+
+    assert len(sample_positions) == 30
+    assert sum(
+        (position.quantidade * position.preco_atual for position in sample_positions),
+        Decimal("0"),
+    ) == Decimal(str(sample_portfolio_payload["patrimonio_total"]))
+    blocked = {item.ticker: item for item in result.ativos_bloqueados}
+    assert blocked["PVBI11"].semaforo == "VERMELHO"
+    assert "TGAR11" in blocked
+    assert not any(order.classe == "Tesouro" for order in result.ordens)
+    assert result.total_alocado + result.troco_residual == Decimal("1000.00")
+
+    positions_by_ticker = {position.ticker: position for position in sample_positions}
+    for order in result.ordens:
+        position_item = positions_by_ticker[order.ticker]
+        expected_average = (
+            position_item.quantidade * position_item.preco_medio
+            + order.total_estimado
+        ) / (position_item.quantidade + order.qtd_calculada)
+        assert order.pm_projetado == expected_average.quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+
+def test_zero_aporte_produces_no_orders() -> None:
+    result = calcular_rebalanceamento(
+        request([position("AAA11")], "0")
+    )
+
+    assert result.ordens == []
+    assert result.total_alocado == Decimal("0.00")
+    assert result.troco_residual == Decimal("0.00")
+
+
+def test_aporte_below_cheapest_unit_returns_full_residual() -> None:
+    result = calcular_rebalanceamento(
+        request(
+            [position("AAA11", quantity="0", average="0", price="100")],
+            "99.99",
+        )
+    )
+
+    assert result.ordens == []
+    assert result.total_alocado == Decimal("0.00")
+    assert result.troco_residual == Decimal("99.99")
+
+
+def test_all_assets_blocked_preserves_aporte() -> None:
+    result = calcular_rebalanceamento(
+        request(
+            [position("AAA11", enabled=False), position("BBB11", enabled=False)],
+            "75",
+        )
+    )
+
+    assert result.ordens == []
+    assert {item.ticker for item in result.ativos_bloqueados} == {"AAA11", "BBB11"}
+    assert result.total_alocado == Decimal("0.00")
+    assert result.troco_residual == Decimal("75.00")
+
+
+def test_yellow_semaphore_halves_target_before_asset_allocation() -> None:
+    result = calcular_rebalanceamento(
+        request(
+            [
+                position(
+                    "AMARELO",
+                    classe="Renda Fixa",
+                    quantity="0",
+                    average="0",
+                    price="1",
+                ),
+                position(
+                    "VERDE",
+                    classe="Renda Fixa",
+                    quantity="0",
+                    average="0",
+                    price="1",
+                ),
+            ],
+            "100",
+            metas_classe={"Renda Fixa": Decimal("1")},
+            semaforos={
+                "AMARELO": FiiSemaphoreAssessment(
+                    semaforo="AMARELO", regras_acionadas=["dado ausente (p. 6)"]
+                ),
+                "VERDE": FiiSemaphoreAssessment(
+                    semaforo="VERDE", regras_acionadas=[]
+                ),
+            },
+        )
+    )
+
+    orders = {order.ticker: order for order in result.ordens}
+    assert orders["AMARELO"].total_estimado == Decimal("33.33")
+    assert orders["VERDE"].total_estimado == Decimal("66.67")
+
+
+def test_tesouro_uses_hundredth_units_and_respects_minimum_ticket() -> None:
+    result = calcular_rebalanceamento(
+        request(
+            [
+                position(
+                    "TESOURO",
+                    classe="Tesouro",
+                    segmento="IPCA+",
+                    quantity="0",
+                    average="0",
+                    price="100",
+                )
+            ],
+            "30",
+            metas_classe={"Tesouro": Decimal("1")},
+        )
+    )
+
+    assert len(result.ordens) == 1
+    assert result.ordens[0].qtd_calculada == Decimal("0.30")
+    assert result.ordens[0].total_estimado == Decimal("30.00")
 
 
 def test_class_and_segment_targets_are_applied_top_down() -> None:
