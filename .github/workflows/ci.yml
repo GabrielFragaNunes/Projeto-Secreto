@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install web dependencies
+        run: npm ci --workspaces=false
+      - name: Lint and build web
+        run: npm run lint && npm run build
+
+  engine-py:
+    name: Python engine tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/engine-py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
+      - name: Run pytest
+        run: python -m pytest -v
+
+  cvm-guardrail:
+    name: CVM language guardrail
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check user-facing language
+        run: python scripts/check_cvm_guardrail.py

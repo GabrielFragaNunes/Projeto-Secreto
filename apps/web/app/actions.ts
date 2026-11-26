@@ -3,7 +3,7 @@
 import * as cheerio from 'cheerio';
 
 // --- LOGGER ---
-export async function logToTerminal(message: any) {
+export async function logToTerminal(message: unknown) {
   console.log('\x1b[33m[CLIENT LOG]\x1b[0m', message);
 }
 
@@ -33,7 +33,7 @@ async function scrapeStatusInvest(ticker: string, type: 'acoes' | 'fundos-imobil
 
     // 2. PEGAR O DIVIDENDO MENSAL (Seu pedido específico)
     // Alvo: <div id="dy-info"> ... <strong class="value">1,1000</strong>
-    let dividendStr = $('#dy-info strong.value').first().text();
+    const dividendStr = $('#dy-info strong.value').first().text();
 
     // Log para debug no terminal do servidor
     if (dividendStr) {
@@ -63,7 +63,7 @@ async function scrapeStatusInvest(ticker: string, type: 'acoes' | 'fundos-imobil
     } else {
        // Fallback para ações que não tem #dy-info: Calcula via DY Anual / 12
        const dyStr = $('div[title="Dividend Yield com base nos últimos 12 meses"] strong.value').text();
-       const dyPercent = parseFloat(dyStr.replace('.', '').replace(',', '').replace('%', '')) || 0;
+       const dyPercent = parseFloat(dyStr.replace(/\./g, '').replace(',', '.').replace('%', '')) || 0;
        finalDividend = (price * (dyPercent / 100)) / 12;
     }
 
@@ -147,7 +147,7 @@ export async function fetchStockData(ticker: string) {
     if (result.success) return result;
   } else {
     // Ações (PETR4, VALE3)
-    let result = await scrapeStatusInvest(cleanTicker, 'acoes');
+    const result = await scrapeStatusInvest(cleanTicker, 'acoes');
     if (result.success) return result;
   }
 

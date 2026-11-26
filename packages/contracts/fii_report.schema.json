@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://projeto-secreto.local/contracts/fii_report.schema.json",
+  "title": "Relatório gerencial de FII",
+  "description": "Indicadores extraídos de relatório público. Cada seção extraída identifica a página de origem.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ticker",
+    "competencia",
+    "gestora",
+    "hash_pdf_sha256",
+    "indicadores_financeiros",
+    "indicadores_imobiliarios",
+    "alavancagem",
+    "guidance_dividendos",
+    "fatos_relevantes"
+  ],
+  "properties": {
+    "ticker": {
+      "type": "string",
+      "pattern": "^[A-Z]{4}11$",
+      "description": "Ticker do fundo imobiliário."
+    },
+    "competencia": {
+      "type": "string",
+      "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+      "description": "Competência no formato YYYY-MM."
+    },
+    "gestora": {
+      "type": "string",
+      "minLength": 1
+    },
+    "hash_pdf_sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "indicadores_financeiros": {
+      "$ref": "#/$defs/indicadoresFinanceiros"
+    },
+    "indicadores_imobiliarios": {
+      "$ref": "#/$defs/indicadoresImobiliarios"
+    },
+    "alavancagem": {
+      "$ref": "#/$defs/alavancagem"
+    },
+    "guidance_dividendos": {
+      "$ref": "#/$defs/guidanceDividendos"
+    },
+    "fatos_relevantes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fatoRelevante"
+      }
+    },
+    "avaliacao_deterministica_usuario": {
+      "readOnly": true,
+      "description": "Campo produzido exclusivamente pelo motor Python com base nos dados extraídos e nos limites configurados pelo usuário. Não deve ser preenchido pelo extrator.",
+      "$ref": "#/$defs/avaliacaoDeterministica"
+    }
+  },
+  "$defs": {
+    "paginaFonte": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Página do PDF de origem, numerada a partir de 1."
+    },
+    "valorMonetario": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "percentual": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 100
+    },
+    "indicadoresFinanceiros": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pagina_fonte",
+        "dados"
+      ],
+      "properties": {
+        "pagina_fonte": {
+          "$ref": "#/$defs/paginaFonte"
+        },
+        "dados": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "patrimonio_liquido_brl": {
+              "$ref": "#/$defs/valorMonetario"
+            },
+            "valor_patrimonial_cota_brl": {
+              "$ref": "#/$defs/valorMonetario"
+            },
+            "caixa_brl": {
+              "$ref": "#/$defs/valorMonetario"
+            },
+            "rendimentos_distribuidos_cota_brl": {
+              "$ref": "#/$defs/valorMonetario"
+            },
+            "dividend_yield_pct": {
+              "$ref": "#/$defs/percentual"
+            }
+          }
+        }
+      }
+    },
+    "indicadoresImobiliarios": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pagina_fonte",
+        "vacancia_fisica_pct",
+        "vacancia_financeira_pct"
+      ],
+      "properties": {
+        "pagina_fonte": {
+          "$ref": "#/$defs/paginaFonte"
+        },
+        "vacancia_fisica_pct": {
+          "$ref": "#/$defs/percentual"
+        },
+        "vacancia_financeira_pct": {
+          "$ref": "#/$defs/percentual"
+        },
+        "area_locavel_m2": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "numero_imoveis": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "alavancagem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pagina_fonte",
+        "indicada",
+        "percentual_sobre_patrimonio"
+      ],
+      "properties": {
+        "pagina_fonte": {
+          "$ref": "#/$defs/paginaFonte"
+        },
+        "indicada": {
+          "type": "boolean"
+        },
+        "percentual_sobre_patrimonio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "descricao": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "guidanceDividendos": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pagina_fonte",
+        "descricao"
+      ],
+      "properties": {
+        "pagina_fonte": {
+          "$ref": "#/$defs/paginaFonte"
+        },
+        "descricao": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "valor_estimado_cota_brl": {
+          "$ref": "#/$defs/valorMonetario"
+        },
+        "periodo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "fatoRelevante": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pagina_fonte",
+        "descricao"
+      ],
+      "properties": {
+        "pagina_fonte": {
+          "$ref": "#/$defs/paginaFonte"
+        },
+        "descricao": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "categoria": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "avaliacaoDeterministica": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semaforo",
+        "regras_acionadas"
+      ],
+      "properties": {
+        "semaforo": {
+          "type": "string",
+          "enum": [
+            "VERDE",
+            "AMARELO",
+            "VERMELHO"
+          ]
+        },
+        "regras_acionadas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

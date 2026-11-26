@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://projeto-secreto.local/contracts/user_policy.schema.json",
+  "title": "Configuração financeira do usuário",
+  "description": "Preferências e limites informados pelo usuário. Metas de classe e segmento não recebem alocações padrão.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "meta_patrimonial_brl",
+    "aporte_mensal_padrao_brl",
+    "metas_classe",
+    "metas_segmento",
+    "ativos_configurados",
+    "gatilhos_semaforo_fii",
+    "filtros_quantitativos_acoes",
+    "controle_fiscal_ir"
+  ],
+  "properties": {
+    "meta_patrimonial_brl": {
+      "type": "number",
+      "minimum": 0
+    },
+    "aporte_mensal_padrao_brl": {
+      "type": "number",
+      "minimum": 0
+    },
+    "metas_classe": {
+      "$ref": "#/$defs/metasPercentuais"
+    },
+    "metas_segmento": {
+      "$ref": "#/$defs/metasPercentuais"
+    },
+    "ativos_configurados": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ativoConfigurado"
+      }
+    },
+    "gatilhos_semaforo_fii": {
+      "$ref": "#/$defs/gatilhosFii"
+    },
+    "filtros_quantitativos_acoes": {
+      "$ref": "#/$defs/filtrosAcoes"
+    },
+    "controle_fiscal_ir": {
+      "$ref": "#/$defs/controleFiscalIr"
+    }
+  },
+  "$defs": {
+    "metasPercentuais": {
+      "type": "object",
+      "description": "Metas definidas pelo usuário. Objeto vazio é permitido e não implica alocação padrão.",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 100
+      }
+    },
+    "ativoConfigurado": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ticker",
+        "classe"
+      ],
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "classe": {
+          "type": "string",
+          "minLength": 1
+        },
+        "segmento": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "meta_alocacao_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "elegivel": {
+          "type": "boolean"
+        }
+      }
+    },
+    "gatilhosFii": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vacancia_fisica_max_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "vacancia_financeira_max_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "alavancagem_max_pct": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "filtrosAcoes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dividend_yield_min_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "p_l_min": {
+          "type": "number"
+        },
+        "p_l_max": {
+          "type": "number"
+        },
+        "roe_min_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "divida_liquida_ebitda_max": {
+          "type": "number"
+        }
+      }
+    },
+    "controleFiscalIr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "habilitado",
+        "prejuizo_compensavel_brl"
+      ],
+      "properties": {
+        "habilitado": {
+          "type": "boolean"
+        },
+        "prejuizo_compensavel_brl": {
+          "type": "number",
+          "minimum": 0
+        },
+        "observacoes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}
