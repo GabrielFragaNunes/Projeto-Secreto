@@ -44,6 +44,9 @@ export default function PortfolioManager() {
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
 
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
   const handleSearchTicker = async () => {
     const ticker = form.ticker.trim();
     if (!ticker) return;
@@ -182,11 +185,11 @@ export default function PortfolioManager() {
 
     try {
       const isJson = file.name.toLowerCase().endsWith('.json');
-      let rows: any[];
+      let rows: unknown[];
 
       if (isJson) {
         const text = await file.text();
-        const parsed = JSON.parse(text);
+        const parsed: unknown = JSON.parse(text);
         rows = Array.isArray(parsed) ? parsed : [parsed];
         await logToTerminal('📄 Arquivo JSON carregado.');
       } else {
@@ -211,15 +214,20 @@ export default function PortfolioManager() {
         const row = rows[i];
         setImportProgress({ current: i + 1, total: rows.length });
 
+        if (!isRecord(row)) continue;
+
         const keys = Object.keys(row);
-        const fields = new Map(keys.map(key => [normalizeHeader(key), row[key]]));
+        const fields = new Map<string, unknown>();
+        for (const key of keys) {
+          fields.set(normalizeHeader(key), row[key]);
+        }
         const getField = (...names: string[]) => names
           .map(name => fields.get(normalizeHeader(name)))
           .find(value => value !== undefined && value !== null && value !== '');
         const tickerRaw = getField('ativo', 'ticker', 'código', 'codigo', 'papel', 'negociação', 'produto');
         const qtyRaw = getField('quantidade', 'qtde', 'posição', 'posicao', 'total', 'disponível', 'disponivel');
 
-        if (tickerRaw === undefined || qtyRaw === undefined) {
+        if (tickerRaw === undefined || tickerRaw === null || qtyRaw === undefined || qtyRaw === null) {
           if (i < 3) await logToTerminal(`⚠️ Linha ${i+1} Pulada: Não achei colunas. Chaves encontradas: ${keys.join(', ')}`);
           continue;
         }
@@ -271,8 +279,9 @@ export default function PortfolioManager() {
       await logToTerminal(`🚀 Importação Finalizada: ${newItems.length} ativos importados.`);
       alert(`Importação ${isJson ? 'JSON' : 'Excel'} concluída! ${newItems.length} ativos processados.`);
 
-    } catch (error: any) {
-      await logToTerminal(`❌ Erro Fatal: ${error.message}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Erro desconhecido.';
+      await logToTerminal(`❌ Erro Fatal: ${message}`);
       alert(`Erro ao ler o arquivo ${file.name.toLowerCase().endsWith('.json') ? 'JSON' : 'Excel'}.`);
     } finally {
       setIsImporting(false);
@@ -324,7 +333,7 @@ export default function PortfolioManager() {
               <FileSpreadsheet className="w-4 h-4" /> Importar (Debug Mode)
             </h2>
             <p className="text-xs text-slate-400 mb-4 relative z-10">
-              Os logs aparecerão no terminal onde você rodou 'npm run dev'.
+              Os logs aparecerão no terminal onde você rodou &apos;npm run dev&apos;.
             </p>
             <input type="file" accept=".xlsx, .xls, .csv, .json" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
             <button onClick={() => fileInputRef.current?.click()} disabled={isImporting} className="w-full bg-amber-700 hover:bg-amber-600 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 relative z-10">
