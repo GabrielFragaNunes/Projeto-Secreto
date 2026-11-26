@@ -1,0 +1,17 @@
+services:
+  engine-py:
+    build:
+      context: ./services/engine-py
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./services/engine-py:/app
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
