@@ -1,0 +1,11 @@
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
+pluggy-connections.json
+*.tgz
+*.xlsx
+__pycache__/
+.venv/
+.pytest_cache/

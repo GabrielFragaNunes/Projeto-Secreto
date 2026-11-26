@@ -1,36 +1,43 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Carteira Inteligente
 
-## Getting Started
+Aplicação web para organizar ativos de uma carteira e estimar a quantidade necessária para que os dividendos mensais de cada ativo cubram o valor de uma cota. A tela principal, chamada **Carteira Snowball**, também resume a renda mensal estimada e o valor que ainda falta investir para alcançar essa meta por ativo.
 
-First, run the development server:
+## O que o projeto oferece
+
+- Cadastro manual de ativos por ticker, preço, dividendo mensal e quantidade.
+- Consulta de preço e dividendo para tickers compatíveis, usando fontes externas conforme disponibilidade.
+- Cálculo do número-meta de cotas (`preço ÷ dividendo mensal`, arredondado para cima), das cotas que faltam e do investimento estimado necessário.
+- Edição e remoção de ativos da lista.
+- Importação de planilhas Excel/CSV e arquivos JSON, e exportação da carteira para JSON.
+- Resumo da renda mensal estimada e do investimento necessário para atingir as metas calculadas.
+
+## Tecnologias
+
+- Next.js 16 e React 19 com TypeScript.
+- Tailwind CSS para estilos.
+- `xlsx` para leitura de planilhas e `cheerio` para extração de dados de páginas externas.
+- Consultas de dados de ativos ao Status Invest, Google Finance e Brapi, conforme disponibilidade.
+
+## Executar localmente
+
+Requer Node.js e npm. Na pasta `carteira-inteligente`:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Abra [http://localhost:3000](http://localhost:3000). Para validar o projeto, também estão disponíveis:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run lint
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Importação e persistência
 
-## Learn More
+Os dados importados ou cadastrados ficam no estado da aplicação em memória no navegador e não são gravados automaticamente em um banco de dados. Exporte a carteira para JSON para guardar uma cópia e importe esse arquivo novamente quando necessário. A importação de planilhas procura colunas de ativo/ticker e quantidade; preços e dividendos podem vir do arquivo ou ser consultados durante o processo.
 
-To learn more about Next.js, take a look at the following resources:
+## Observações
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Os preços e dividendos consultados dependem de serviços externos e podem estar indisponíveis ou desatualizados. O cálculo usa o dividendo mensal informado e é apenas uma estimativa matemática; não constitui recomendação financeira nem garantia de rendimento.

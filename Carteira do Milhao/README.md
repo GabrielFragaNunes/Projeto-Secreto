@@ -1,98 +1,45 @@
-# Dashboard Financeiro - Patrimonio e Meta 2040
+# Carteira do Milhão
 
-Dashboard em HTML, CSS e JavaScript (vanilla) para acompanhar patrimonio, alocacao e projecao de crescimento ate 2040.
+Dashboard financeiro para acompanhar uma carteira de investimentos e visualizar uma projeção de patrimônio em direção à meta de R$ 1 milhão até 2040. A interface é feita em HTML, CSS e JavaScript; o projeto também inclui um servidor Node.js/Express que disponibiliza dados e integrações.
 
-## Arquivos
+## O que o projeto oferece
 
-- `index.html`: dashboard completo com CSS e JS embutidos
+- Resumo do patrimônio, da meta e dos aportes mensais.
+- Gráficos de alocação por classe de ativo e de distribuição de FIIs por segmento.
+- Projeções de crescimento em diferentes cenários, com gráfico e tabela anual.
+- Lista dos principais ativos e exportação dos dados da carteira em CSV.
+- Integração opcional com Pluggy para conectar instituições financeiras, consultar contas e carregar transações.
 
-## Deploy no GitHub Pages
+## Tecnologias
 
-1. Crie um repositorio no GitHub (exemplo: `dashboard-financeiro`).
-2. Envie o arquivo `index.html` para a branch `main`.
-3. Abra o repositorio em **Settings -> Pages**.
-4. Em **Source**, selecione **Deploy from a branch**.
-5. Escolha `main` e pasta `/ (root)`.
-6. Salve e aguarde 1 a 2 minutos.
-7. Acesse a URL publicada pelo GitHub Pages.
+- HTML, CSS e JavaScript no dashboard (`index.html`), com Chart.js para os gráficos.
+- Node.js e Express em `server.js`, para servir a aplicação e fornecer endpoints de API.
+- SDK da Pluggy para criar tokens de conexão e consultar dados das conexões.
 
-## Como atualizar os dados
+## Executar localmente
 
-Todos os dados ficam no bloco `<script>` do `index.html`.
-
-1. Edite os arrays:
-   - `stocks` para acoes
-   - `fiis` para fundos imobiliarios
-   - `otherAssets` para ETF, renda fixa, liquidez, cripto e outros
-2. Se necessario, ajuste os metadados em `METADATA`:
-   - `initialPatrimony`
-   - `monthlyContribution`
-   - `startAge`, `startYear`, `endYear`
-3. Salve e recarregue a pagina no navegador.
-
-## Como adicionar novos cenarios de projecao
-
-A lista de cenarios fica no array `scenarios` dentro do `index.html`.
-
-Exemplo:
-
-```js
-scenarios.push({
-  nome: "Super Otimista",
-  taxa: 0.011,
-  aporte: 2600,
-  cor: "#f43f5e"
-});
-```
-
-Campos obrigatorios:
-
-- `nome`: nome exibido no grafico
-- `taxa`: taxa mensal em decimal (ex.: 0.007 = 0,7% a.m.)
-- `aporte`: valor do aporte mensal
-- `cor`: cor da linha no grafico
-
-A tabela anual e o grafico de linhas sao recalculados automaticamente quando o dashboard inicia.
-
-## Integração com Pluggy MCP
-
-Conecte seu agente de IA à documentação viva e à referência de API da Pluggy para obter respostas fundamentadas com citações, sem precisar adivinhar ou consultar a documentação manualmente.
-
-- URL do servidor: `https://mcp.pluggy.ai/mcp`
-- Documentação: `https://docs.pluggy.ai/pt/docs/developer-tools/mcp`
-- Conectar seu agente: `https://docs.pluggy.ai/pt/mcp#connect`
-
-### VS Code
+Requer Node.js e npm. Na pasta `Carteira do Milhao`:
 
 ```bash
-code --add-mcp '{"name":"pluggy-docs","type":"http","url":"https://mcp.pluggy.ai/mcp"}'
+npm install
+npm start
 ```
 
-### Modo agente do GitHub Copilot
+Abra [http://localhost:3001](http://localhost:3001). A porta padrão é `3001` e pode ser alterada pela variável `PORT`.
 
-Adicione um arquivo `.vscode/mcp.json` no workspace com o seguinte conteúdo:
+Para habilitar a integração com Pluggy, configure `CLIENT_ID` e `CLIENT_SECRET` no ambiente do servidor (por exemplo, em um arquivo `.env` local, que não deve ser compartilhado nem enviado ao repositório). Mantenha essas credenciais exclusivamente no servidor. Sem elas, os recursos que dependem da API da Pluggy não estarão disponíveis.
 
-```json
-{
-  "servers": {
-    "pluggy-docs": {
-      "type": "http",
-      "url": "https://mcp.pluggy.ai/mcp"
-    }
-  }
-}
-```
+## Dados e projeções
 
-### Exemplos de perguntas
+Os ativos, valores e parâmetros da carteira usados no dashboard estão definidos no código de `index.html` e nos dados servidos por `server.js`. Atualize esses valores conforme necessário e recarregue a página. Os resultados projetados dependem das premissas configuradas no projeto e não representam garantia de rendimento nem recomendação de investimento.
 
-- "Por que o item abc-123 está falhando e o que o usuário deve fazer?"
-- "Como está a saúde das minhas conexões neste mês vs. o mês passado?"
-- "Quais instituições têm mais erros nas últimas 7 dias?"
+O dashboard pode ser publicado como conteúdo estático, mas os recursos de conexão bancária da Pluggy precisam de um servidor Node.js acessível, com as credenciais configuradas com segurança.
 
-Isso permite que o agente leia a documentação atualizada, consulte a API e responda com contexto técnico confiável, sem depender de memória ou suposições.
+## Endpoints principais
 
-## Observacoes
-
-- O dashboard usa Chart.js via CDN, sem necessidade de servidor local.
-- Basta abrir `index.html` no navegador para visualizar os graficos.
-- O botao **Exportar CSV** gera um arquivo com os ativos e resumo da carteira.
+- `GET /api/patrimonio`: dados da carteira e parâmetros do dashboard.
+- `POST /api/connect-token`: cria um token temporário do Pluggy Connect.
+- `/api/pluggy-status`: consulta e atualiza o estado das conexões.
+- `GET /api/pluggy-accounts` e `GET /api/pluggy-transactions`: consulta contas e transações.
+- `POST /api/webhooks/pluggy`: recebe eventos de webhook da Pluggy.
+- `GET /api/pluggy-item`: consulta os detalhes de uma conexão.
