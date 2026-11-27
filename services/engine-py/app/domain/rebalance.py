@@ -1,475 +1,651 @@
-from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
+from __future__ import annotations
 
-from app.domain.models import (
-    AssetClass,
-    BlockedAssetInfo,
-    ClassAllocationSummary,
-    OrderCalculation,
-    PositionItem,
-    RebalanceRequest,
-    SimulationResult,
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.domain.fii_risk import (
+    FiiSemaphoreAssessment,
+    SemaphoreThresholds,
+    avaliar_semaforo_fii,
 )
 
 CENT = Decimal("0.01")
-ZERO = Decimal("0")
-SHARE_CLASSES = {"FIIs", "Ações", "ETF", "FIAGRO"}
-SEGMENT_KEY_SEPARATOR = "::"
+FOUR_PLACES = Decimal("0.0001")
+WHOLE_UNIT = Decimal("1")
+TREASURY_UNIT = Decimal("0.01")
+TREASURY_MINIMUM_ORDER = Decimal("30.00")
 
 
-def segment_meta_key(classe: str, segmento: str) -> str:
-    """Return the flat-contract key for a class-specific segment target."""
-    return f"{classe}{SEGMENT_KEY_SEPARATOR}{segmento}"
+def _decimal_value(value: object) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, (Decimal, int, float, str)):
+        raise ValueError("O valor deve ser numérico.")
+    try:
+        result = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise ValueError("O valor deve ser numérico.") from error
+    if not result.is_finite():
+        raise ValueError("O valor deve ser finito.")
+    return result
 
 
 def _money(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
-def _portfolio_value(position: PositionItem) -> Decimal:
-    return _money(position.quantidade * position.preco_atual)
+def _percentage(value: Decimal) -> Decimal:
+    return value.quantize(FOUR_PLACES, rounding=ROUND_HALF_UP)
 
 
-def _allocate_cents(total: Decimal, weights: dict[str, Decimal]) -> dict[str, Decimal]:
-    positive_weights = {
-        key: weight for key, weight in weights.items() if weight > ZERO
-    }
-    if not positive_weights or total <= ZERO:
-        return {key: ZERO for key in weights}
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class PortfolioPosition(StrictModel):
+    ticker: str = Field(min_length=1)
+    classe: str = Field(min_length=1)
+    segmento: str = "Outros"
+    quantidade: Decimal = Field(ge=Decimal("0"))
+    preco_medio: Decimal | None = Field(default=None, ge=Decimal("0"))
+    preco_atual: Decimal = Field(gt=Decimal("0"))
+    habilitado_aporte: bool = True
+    preco_teto_manual: Decimal | None = Field(default=None, ge=Decimal("0"))
+    meta_alocacao_pct: Decimal | None = Field(
+        default=None, ge=Decimal("0"), le=Decimal("100")
+    )
+
+    @field_validator(
+        "quantidade",
+        "preco_medio",
+        "preco_atual",
+        "preco_teto_manual",
+        "meta_alocacao_pct",
+        mode="before",
+    )
+    @classmethod
+    def parse_decimal_fields(cls, value: object) -> Decimal | None:
+        return None if value is None else _decimal_value(value)
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_ticker(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("O ticker não pode estar vazio.")
+        return normalized
+
+
+class FiiFacts(StrictModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    vacancia_fisica_pct: Decimal | None = None
+    vacancia_financeira_pct: Decimal | None = None
+    alavancagem_indicada: bool = False
+    alavancagem_pct: Decimal | None = None
+    pagina_indicadores_imobiliarios: int = Field(default=1, ge=1)
+    pagina_alavancagem: int = Field(default=1, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def flatten_report_payload(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+
+        payload = dict(value)
+        indicators = payload.get("indicadores_imobiliarios")
+        if isinstance(indicators, dict):
+            payload.setdefault(
+                "vacancia_fisica_pct", indicators.get("vacancia_fisica_pct")
+            )
+            payload.setdefault(
+                "vacancia_financeira_pct",
+                indicators.get("vacancia_financeira_pct"),
+            )
+            payload.setdefault(
+                "pagina_indicadores_imobiliarios",
+                indicators.get("pagina_fonte", 1),
+            )
+            payload.pop("indicadores_imobiliarios", None)
+
+        leverage = payload.get("alavancagem")
+        if isinstance(leverage, dict):
+            payload.setdefault("alavancagem_indicada", leverage.get("indicada", False))
+            payload.setdefault(
+                "alavancagem_pct",
+                leverage.get("percentual_sobre_patrimonio"),
+            )
+            payload.setdefault("pagina_alavancagem", leverage.get("pagina_fonte", 1))
+            payload.pop("alavancagem", None)
+        elif isinstance(leverage, bool):
+            payload.setdefault("alavancagem_indicada", leverage)
+        elif isinstance(leverage, (Decimal, int, float)):
+            payload.setdefault("alavancagem_pct", leverage)
+            payload.setdefault("alavancagem_indicada", leverage > 0)
+
+        source_page = payload.get("pagina_fonte")
+        if isinstance(source_page, int):
+            payload.setdefault("pagina_indicadores_imobiliarios", source_page)
+            payload.setdefault("pagina_alavancagem", source_page)
+        return payload
+
+    @field_validator(
+        "vacancia_fisica_pct",
+        "vacancia_financeira_pct",
+        "alavancagem_pct",
+        mode="before",
+    )
+    @classmethod
+    def parse_decimal_fields(cls, value: object) -> Decimal | None:
+        return None if value is None else _decimal_value(value)
+
+
+class ConfiguredAsset(StrictModel):
+    ticker: str = Field(min_length=1)
+    classe: str = Field(min_length=1)
+    segmento: str | None = None
+    meta_alocacao_pct: Decimal | None = Field(
+        default=None, ge=Decimal("0"), le=Decimal("100")
+    )
+    elegivel: bool = True
+
+    @field_validator("meta_alocacao_pct", mode="before")
+    @classmethod
+    def parse_target(cls, value: object) -> Decimal | None:
+        return None if value is None else _decimal_value(value)
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_ticker(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("O ticker não pode estar vazio.")
+        return normalized
+
+
+class FiiThresholdPolicy(StrictModel):
+    vacancia_fisica_max_pct: Decimal = Field(
+        default=Decimal("25"), ge=Decimal("0"), le=Decimal("100")
+    )
+    vacancia_financeira_max_pct: Decimal = Field(
+        default=Decimal("25"), ge=Decimal("0"), le=Decimal("100")
+    )
+    alavancagem_max_pct: Decimal | None = Field(default=None, ge=Decimal("0"))
+    vacancia_financeira_amarelo_pct: Decimal | None = Field(
+        default=None, ge=Decimal("0"), le=Decimal("100")
+    )
+
+    @field_validator(
+        "vacancia_fisica_max_pct",
+        "vacancia_financeira_max_pct",
+        "alavancagem_max_pct",
+        "vacancia_financeira_amarelo_pct",
+        mode="before",
+    )
+    @classmethod
+    def parse_decimal_fields(cls, value: object) -> Decimal | None:
+        return None if value is None else _decimal_value(value)
+
+
+class PortfolioPolicy(StrictModel):
+    meta_patrimonial_brl: Decimal | None = Field(default=None, ge=Decimal("0"))
+    aporte_mensal_padrao_brl: Decimal | None = Field(default=None, ge=Decimal("0"))
+    metas_classe: dict[str, Decimal]
+    metas_segmento: dict[str, Decimal] = Field(default_factory=dict)
+    ativos_configurados: list[ConfiguredAsset] = Field(default_factory=list)
+    gatilhos_semaforo_fii: FiiThresholdPolicy = Field(
+        default_factory=FiiThresholdPolicy
+    )
+    filtros_quantitativos_acoes: dict[str, Decimal] = Field(default_factory=dict)
+    controle_fiscal_ir: dict[str, Decimal | bool | str | None] = Field(
+        default_factory=dict
+    )
+    acao_semaforo_vermelho: Literal["bloquear", "alertar"] = "bloquear"
+    reducao_semaforo_amarelo_pct: Decimal = Field(
+        default=Decimal("50"), ge=Decimal("0"), le=Decimal("100")
+    )
+
+    @field_validator(
+        "meta_patrimonial_brl",
+        "aporte_mensal_padrao_brl",
+        "reducao_semaforo_amarelo_pct",
+        mode="before",
+    )
+    @classmethod
+    def parse_decimal_fields(cls, value: object) -> Decimal | None:
+        return None if value is None else _decimal_value(value)
+
+    @field_validator(
+        "metas_classe",
+        "metas_segmento",
+        "filtros_quantitativos_acoes",
+        mode="before",
+    )
+    @classmethod
+    def parse_allocation_targets(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        return {key: _decimal_value(weight) for key, weight in value.items()}
+
+    @field_validator("controle_fiscal_ir", mode="before")
+    @classmethod
+    def parse_tax_controls(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        return {
+            key: (
+                _decimal_value(item)
+                if isinstance(item, (int, float, Decimal)) and not isinstance(item, bool)
+                else item
+            )
+            for key, item in value.items()
+        }
+
+    @model_validator(mode="after")
+    def validate_class_targets(self) -> PortfolioPolicy:
+        if not self.metas_classe:
+            raise ValueError("Configure metas de classe antes da simulação.")
+        if any(weight < 0 or weight > 1 for weight in self.metas_classe.values()):
+            raise ValueError("Cada meta de classe deve estar entre 0 e 1.")
+        if sum(self.metas_classe.values(), Decimal("0")) != Decimal("1"):
+            raise ValueError("A soma de metas_classe deve ser exatamente 1.00.")
+        return self
+
+
+class SimulationRequest(StrictModel):
+    positions: list[PortfolioPosition]
+    policy: PortfolioPolicy
+    aporte_disponivel: Decimal = Field(ge=Decimal("0"))
+    fii_facts: dict[str, FiiFacts] = Field(default_factory=dict)
+
+    @field_validator("aporte_disponivel", mode="before")
+    @classmethod
+    def parse_contribution(cls, value: object) -> Decimal:
+        return _decimal_value(value)
+
+    @field_validator("fii_facts", mode="before")
+    @classmethod
+    def normalize_fact_tickers(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        return {ticker.strip().upper(): facts for ticker, facts in value.items()}
+
+
+class CalculatedOrder(StrictModel):
+    ticker: str
+    classe: str
+    segmento: str
+    preco_atual: Decimal
+    quantidade_calculada: Decimal
+    total_estimado: Decimal
+    preco_medio_atual: Decimal | None
+    preco_medio_projetado: Decimal | None
+    semaforo: Literal["VERDE", "AMARELO", "VERMELHO"] | None
+    regras_acionadas: list[str]
+    pagina_fonte: int | None
+
+
+class ExcludedAsset(StrictModel):
+    ticker: str
+    classe: str
+    motivo: str
+    semaforo: Literal["VERDE", "AMARELO", "VERMELHO"] | None = None
+    regras_acionadas: list[str] = Field(default_factory=list)
+    pagina_fonte: int | None = None
+
+
+class ClassComparison(StrictModel):
+    classe: str
+    patrimonio_atual_brl: Decimal
+    meta_pct: Decimal
+    percentual_atual: Decimal
+    percentual_depois: Decimal
+
+
+class SimulationResult(StrictModel):
+    patrimonio_atual_brl: Decimal
+    aporte_disponivel: Decimal
+    total_alocado: Decimal
+    troco_residual: Decimal
+    eficiencia_aporte_pct: Decimal
+    comparativo_classes: list[ClassComparison]
+    ordens: list[CalculatedOrder]
+    ativos_excluidos: list[ExcludedAsset]
+
+
+def _split_cents(
+    total: Decimal,
+    weights: list[tuple[str, Decimal]],
+) -> dict[str, Decimal]:
+    if total <= 0 or not weights:
+        return {key: Decimal("0.00") for key, _ in weights}
+    positive = [(key, weight) for key, weight in weights if weight > 0]
+    if not positive:
+        return {key: Decimal("0.00") for key, _ in weights}
 
     total_cents = int((_money(total) / CENT).to_integral_value(rounding=ROUND_DOWN))
-    weight_total = sum(positive_weights.values(), ZERO)
-    exact_cents = {
-        key: Decimal(total_cents) * weight / weight_total
-        for key, weight in positive_weights.items()
-    }
-    allocated_cents = {
-        key: int(value.to_integral_value(rounding=ROUND_DOWN))
-        for key, value in exact_cents.items()
-    }
-    remaining_cents = total_cents - sum(allocated_cents.values())
-    remainder_order = sorted(
-        positive_weights,
-        key=lambda key: (-(exact_cents[key] - allocated_cents[key]), key),
-    )
-    for key in remainder_order[:remaining_cents]:
-        allocated_cents[key] += 1
+    weight_total = sum((weight for _, weight in positive), Decimal("0"))
+    shares: dict[str, Decimal] = {}
+    remainders: list[tuple[str, Decimal]] = []
+    allocated_cents = 0
+    for key, weight in positive:
+        exact_cents = Decimal(total_cents) * weight / weight_total
+        whole_cents = int(exact_cents.to_integral_value(rounding=ROUND_DOWN))
+        shares[key] = Decimal(whole_cents) * CENT
+        allocated_cents += whole_cents
+        remainders.append((key, exact_cents - whole_cents))
 
-    return {
-        key: Decimal(allocated_cents.get(key, 0)) * CENT for key in weights
-    }
+    remainder_cents = total_cents - allocated_cents
+    for key, _ in sorted(remainders, key=lambda item: (-item[1], item[0]))[
+        :remainder_cents
+    ]:
+        shares[key] += CENT
 
-
-def _segment_weights_for_class(
-    request: RebalanceRequest, classe: str, segments: set[str]
-) -> dict[str, Decimal] | None:
-    prefix = f"{classe}{SEGMENT_KEY_SEPARATOR}"
-    specific = {
-        key[len(prefix) :]: value
-        for key, value in request.metas_segmento.items()
-        if key.startswith(prefix)
-    }
-    if specific:
-        return {segment: specific[segment] for segment in segments if segment in specific}
-
-    generic = {
-        segment: request.metas_segmento[segment]
-        for segment in segments
-        if segment in request.metas_segmento
-    }
-    return generic or None
+    for key, _ in weights:
+        shares.setdefault(key, Decimal("0.00"))
+    return shares
 
 
-def _blocked_reasons(
-    position: PositionItem, request: RebalanceRequest
-) -> list[str]:
-    reasons: list[str] = []
-    if not position.habilitado_aporte:
-        reasons.append("aporte desabilitado para o ativo")
-    if position.ticker in request.ativos_bloqueados_manualmente:
-        reasons.append("ativo bloqueado manualmente")
-    if position.preco_atual <= ZERO:
-        reasons.append("preço atual menor ou igual a zero")
-    if (
-        position.preco_teto_manual is not None
-        and position.preco_atual > position.preco_teto_manual
-    ):
-        reasons.append("preço atual acima do teto manual configurado")
-
-    assessment = request.semaforos.get(position.ticker)
-    if (
-        assessment is not None
-        and assessment.semaforo == "VERMELHO"
-        and request.acao_semaforo_vermelho == "BLOQUEAR_APORTE"
-    ):
-        reasons.append("semáforo VERMELHO com bloqueio de aporte configurado")
-    return reasons
+def _order_quantity(budget: Decimal, price: Decimal, treasury: bool) -> Decimal:
+    unit = TREASURY_UNIT if treasury else WHOLE_UNIT
+    quantity = (budget / price / unit).to_integral_value(rounding=ROUND_DOWN) * unit
+    if quantity <= 0:
+        return Decimal("0")
+    cost = _money(quantity * price)
+    while cost > budget and quantity > 0:
+        quantity -= unit
+        cost = _money(quantity * price)
+    if treasury and cost < TREASURY_MINIMUM_ORDER:
+        return Decimal("0")
+    return quantity
 
 
-def _quantity_for_budget(
-    position: PositionItem,
-    budget: Decimal,
-    request: RebalanceRequest,
-) -> tuple[Decimal, Decimal]:
-    if budget <= ZERO or position.preco_atual <= ZERO:
-        return ZERO, ZERO
+def _semaphore_for(
+    position: PortfolioPosition,
+    facts: FiiFacts | None,
+    policy: PortfolioPolicy,
+) -> FiiSemaphoreAssessment | None:
+    if position.classe != "FIIs":
+        return None
 
-    increment = Decimal("1") if position.classe in SHARE_CLASSES else Decimal("0.01")
-    raw_quantity = budget / position.preco_atual / increment
-    quantity = raw_quantity.to_integral_value(rounding=ROUND_DOWN) * increment
-    total = _money(quantity * position.preco_atual)
-
-    if (
-        position.classe == "Tesouro"
-        and total < request.minimo_tesouro_direto
-    ):
-        return ZERO, ZERO
-    if total > budget:
-        return ZERO, ZERO
-    return quantity, total
-
-
-def _class_and_segment_totals(
-    positions: list[PositionItem],
-) -> tuple[dict[str, Decimal], dict[tuple[str, str], Decimal], Decimal]:
-    class_totals: dict[str, Decimal] = {}
-    segment_totals: dict[tuple[str, str], Decimal] = {}
-    total = ZERO
-    for position in positions:
-        value = _portfolio_value(position)
-        total += value
-        class_totals[position.classe] = class_totals.get(position.classe, ZERO) + value
-        key = (position.classe, position.segmento)
-        segment_totals[key] = segment_totals.get(key, ZERO) + value
-    return class_totals, segment_totals, _money(total)
-
-
-def _percentage(numerator: Decimal, denominator: Decimal) -> Decimal:
-    if denominator <= ZERO:
-        return ZERO.quantize(CENT)
-    return (numerator * Decimal("100") / denominator).quantize(
-        CENT, rounding=ROUND_HALF_UP
+    report = facts or FiiFacts()
+    thresholds = policy.gatilhos_semaforo_fii
+    assessment = avaliar_semaforo_fii(
+        vacancia_fisica_pct=report.vacancia_fisica_pct,
+        vacancia_financeira_pct=report.vacancia_financeira_pct,
+        pagina_indicadores_imobiliarios=report.pagina_indicadores_imobiliarios,
+        alavancagem_indicada=report.alavancagem_indicada,
+        alavancagem_pct=report.alavancagem_pct,
+        pagina_alavancagem=report.pagina_alavancagem,
+        thresholds=SemaphoreThresholds(
+            vacancia_fisica_max_pct=thresholds.vacancia_fisica_max_pct,
+            vacancia_financeira_max_pct=thresholds.vacancia_financeira_max_pct,
+            alavancagem_max_pct=thresholds.alavancagem_max_pct,
+        ),
     )
 
+    yellow_limit = thresholds.vacancia_financeira_amarelo_pct
+    if (
+        assessment.semaforo == "VERDE"
+        and yellow_limit is not None
+        and report.vacancia_financeira_pct is not None
+        and report.vacancia_financeira_pct > yellow_limit
+    ):
+        return FiiSemaphoreAssessment(
+            semaforo="AMARELO",
+            regras_acionadas=[
+                f"vacancia_financeira_pct={report.vacancia_financeira_pct}% "
+                f"acima do limite amarelo configurado de {yellow_limit}% "
+                f"(p. {report.pagina_indicadores_imobiliarios})"
+            ],
+        )
+    return assessment
 
-def calcular_rebalanceamento(request: RebalanceRequest) -> SimulationResult:
-    """Calculate a deterministic contribution simulation without generating sales."""
+
+def simulate_contribution(request: SimulationRequest) -> SimulationResult:
     positions = request.positions
-    aporte = _money(request.aporte_disponivel)
-    class_current, segment_current, patrimonio_atual = _class_and_segment_totals(
-        positions
-    )
-    blocked_reasons = {
-        position.ticker: _blocked_reasons(position, request)
+    policy = request.policy
+    contribution = _money(request.aporte_disponivel)
+    current_values = {
+        position.ticker: _money(position.quantidade * position.preco_atual)
         for position in positions
     }
-    class_positions: dict[str, list[PositionItem]] = {}
-    blocked_by_ticker: dict[str, list[str]] = {
-        ticker: list(reasons)
-        for ticker, reasons in blocked_reasons.items()
-        if reasons
-    }
+    current_by_class: dict[str, Decimal] = {}
+    for position in positions:
+        current_by_class[position.classe] = (
+            current_by_class.get(position.classe, Decimal("0"))
+            + current_values[position.ticker]
+        )
+
+    current_total = sum(current_values.values(), Decimal("0.00"))
+    post_contribution_total = current_total + contribution
+    assessments: dict[str, FiiSemaphoreAssessment | None] = {}
+    exclusions: list[ExcludedAsset] = []
+    eligible_by_class: dict[str, list[PortfolioPosition]] = {}
+    configured_assets = {asset.ticker: asset for asset in policy.ativos_configurados}
 
     for position in positions:
-        class_positions.setdefault(position.classe, []).append(position)
+        assessment = _semaphore_for(
+            position, request.fii_facts.get(position.ticker), policy
+        )
+        assessments[position.ticker] = assessment
+        rules = assessment.regras_acionadas if assessment else []
+        source_page = None
+        facts = request.fii_facts.get(position.ticker)
+        if facts and position.classe == "FIIs":
+            source_page = facts.pagina_indicadores_imobiliarios
 
-    eligible_by_class: dict[str, list[PositionItem]] = {}
-    effective_segment_weights: dict[str, dict[str, Decimal] | None] = {}
-    for classe, items in class_positions.items():
-        class_meta = request.metas_classe.get(classe)
-        if class_meta is None or class_meta == ZERO:
-            for position in items:
-                if not blocked_reasons[position.ticker]:
-                    reason = (
-                        "meta de classe igual a zero"
-                        if class_meta == ZERO
-                        else "meta de classe não configurada"
-                    )
-                    blocked_by_ticker.setdefault(position.ticker, []).append(reason)
+        configured = configured_assets.get(position.ticker)
+        reason: str | None = None
+        if not position.habilitado_aporte:
+            reason = "Ativo desabilitado nas regras configuradas."
+        elif configured is not None and not configured.elegivel:
+            reason = "Ativo marcado como não elegível nas regras configuradas."
+        elif (
+            position.preco_teto_manual is not None
+            and position.preco_atual > position.preco_teto_manual
+        ):
+            reason = "Preço atual acima do teto manual configurado."
+        elif (
+            assessment is not None
+            and assessment.semaforo == "VERMELHO"
+            and policy.acao_semaforo_vermelho == "bloquear"
+        ):
+            reason = "Gatilho vermelho configurado para bloquear o aporte."
+
+        if reason is None:
+            eligible_by_class.setdefault(position.classe, []).append(position)
+        else:
+            exclusions.append(
+                ExcludedAsset(
+                    ticker=position.ticker,
+                    classe=position.classe,
+                    motivo=reason,
+                    semaforo=assessment.semaforo if assessment else None,
+                    regras_acionadas=rules,
+                    pagina_fonte=source_page,
+                )
+            )
+
+    class_needs: dict[str, Decimal] = {}
+    for asset_class, target_weight in policy.metas_classe.items():
+        if not eligible_by_class.get(asset_class):
+            class_needs[asset_class] = Decimal("0")
+            continue
+        target_value = _money(post_contribution_total * target_weight)
+        need = max(
+            Decimal("0"),
+            target_value - current_by_class.get(asset_class, Decimal("0")),
+        )
+        class_needs[asset_class] = need
+
+    total_need = sum(class_needs.values(), Decimal("0"))
+    to_distribute = min(contribution, _money(total_need))
+    class_budgets = _split_cents(
+        to_distribute,
+        [(asset_class, need) for asset_class, need in class_needs.items()],
+    )
+
+    orders: list[CalculatedOrder] = []
+    order_values_by_class: dict[str, Decimal] = {}
+    for asset_class in sorted(class_budgets):
+        group = eligible_by_class.get(asset_class, [])
+        class_budget = class_budgets[asset_class]
+        if not group or class_budget <= 0:
             continue
 
-        base_eligible = [
-            position for position in items if not blocked_reasons[position.ticker]
-        ]
-        segments = {position.segmento for position in base_eligible}
-        segment_weights = _segment_weights_for_class(request, classe, segments)
-        effective_segment_weights[classe] = segment_weights
-        eligible: list[PositionItem] = []
-        for position in base_eligible:
-            if segment_weights is None:
-                eligible.append(position)
-                continue
-            if position.segmento not in segment_weights:
-                blocked_by_ticker.setdefault(position.ticker, []).append(
-                    "meta do segmento não configurada"
-                )
-            elif segment_weights[position.segmento] == ZERO:
-                blocked_by_ticker.setdefault(position.ticker, []).append(
-                    "meta do segmento igual a zero"
-                )
-            else:
-                eligible.append(position)
-        if eligible:
-            eligible_by_class[classe] = eligible
-
-    eligible_classes = {
-        classe: items
-        for classe, items in eligible_by_class.items()
-        if request.metas_classe.get(classe, ZERO) > ZERO
-    }
-    total_target_patrimony = patrimonio_atual + aporte
-    class_deficits = {
-        classe: max(
-            ZERO,
-            total_target_patrimony * request.metas_classe[classe]
-            - class_current.get(classe, ZERO),
-        )
-        for classe in eligible_classes
-    }
-    if sum(class_deficits.values(), ZERO) > ZERO:
-        class_weights = class_deficits
-    else:
-        class_weights = {
-            classe: request.metas_classe[classe] for classe in eligible_classes
-        }
-    class_budgets = _allocate_cents(aporte, class_weights)
-
-    segment_budgets: dict[tuple[str, str], Decimal] = {}
-    for classe, items in eligible_classes.items():
-        class_budget = class_budgets.get(classe, ZERO)
-        if class_budget <= ZERO:
-            continue
-        segment_weights = effective_segment_weights.get(classe)
-        if segment_weights is None:
-            segment_budgets[(classe, "*")] = class_budget
-            continue
-
-        current_by_segment: dict[str, Decimal] = {}
-        items_by_segment: dict[str, list[PositionItem]] = {}
-        for position in items:
-            items_by_segment.setdefault(position.segmento, []).append(position)
-            current_by_segment[position.segmento] = segment_current.get(
-                (classe, position.segmento), ZERO
-            )
-
-        class_after_budget = class_current.get(classe, ZERO) + class_budget
-        deficits = {
-            segment: max(
-                ZERO,
-                class_after_budget * segment_weights[segment]
-                - current_by_segment[segment],
-            )
-            for segment in items_by_segment
-        }
-        weights = (
-            deficits
-            if sum(deficits.values(), ZERO) > ZERO
-            else {
-                segment: segment_weights[segment]
-                for segment in items_by_segment
-            }
-        )
-        allocations = _allocate_cents(class_budget, weights)
-        for segment, amount in allocations.items():
-            segment_budgets[(classe, segment)] = amount
-
-    asset_budgets: dict[str, Decimal] = {}
-    for classe, items in eligible_classes.items():
-        segment_weights = effective_segment_weights.get(classe)
-        groups: dict[str, list[PositionItem]] = {}
-        for position in items:
-            group = position.segmento if segment_weights is not None else "*"
-            groups.setdefault(group, []).append(position)
-
-        for segment, group in groups.items():
-            segment_budget = segment_budgets.get((classe, segment), ZERO)
-            if segment_budget <= ZERO:
-                continue
-            average_target = (
-                sum((_portfolio_value(item) for item in group), ZERO)
-                + segment_budget
-            ) / Decimal(len(group))
-            deficits: dict[str, Decimal] = {}
-            for position in group:
-                assessment = request.semaforos.get(position.ticker)
-                target = average_target
-                if assessment is not None and assessment.semaforo == "AMARELO":
-                    target *= request.fator_reducao_amarelo
-                deficits[position.ticker] = max(
-                    ZERO, target - _portfolio_value(position)
-                )
-            weights = (
-                deficits
-                if sum(deficits.values(), ZERO) > ZERO
-                else {position.ticker: Decimal("1") for position in group}
-            )
-            allocations = _allocate_cents(segment_budget, weights)
-            asset_budgets.update(allocations)
-
-    orders_by_ticker: dict[str, Decimal] = {}
-    costs_by_ticker: dict[str, Decimal] = {}
-    position_by_ticker = {position.ticker: position for position in positions}
-    for ticker, budget in asset_budgets.items():
-        position = position_by_ticker[ticker]
-        quantity, total = _quantity_for_budget(position, budget, request)
-        if quantity > ZERO and total > ZERO:
-            orders_by_ticker[ticker] = quantity
-            costs_by_ticker[ticker] = total
-
-    total_alocado = _money(sum(costs_by_ticker.values(), ZERO))
-    troco = _money(aporte - total_alocado)
-
-    while True:
-        class_after_orders, segment_after_orders, _ = _class_and_segment_totals(positions)
-        for ticker, cost in costs_by_ticker.items():
-            position = position_by_ticker[ticker]
-            class_after_orders[position.classe] = (
-                class_after_orders.get(position.classe, ZERO) + cost
-            )
-            key = (position.classe, position.segmento)
-            segment_after_orders[key] = segment_after_orders.get(key, ZERO) + cost
-
-        candidates: list[tuple[Decimal, Decimal, Decimal, str]] = []
-        incremental_costs: dict[str, Decimal] = {}
-        for classe, items in eligible_classes.items():
-            if classe not in SHARE_CLASSES:
-                continue
-            class_target = total_target_patrimony * request.metas_classe[classe]
-            if class_target <= ZERO:
-                continue
-            seg_weights = effective_segment_weights.get(classe)
-            distinct_segments = {item.segmento for item in items}
-            for position in items:
-                if position.preco_atual > troco:
-                    continue
-                current_quantity = orders_by_ticker.get(position.ticker, ZERO)
-                current_order_cost = costs_by_ticker.get(position.ticker, ZERO)
-                next_order_cost = _money(
-                    (current_quantity + Decimal("1")) * position.preco_atual
-                )
-                incremental_cost = next_order_cost - current_order_cost
-                if incremental_cost <= ZERO or incremental_cost > troco:
-                    continue
-                current_class = class_after_orders.get(classe, ZERO)
-                class_gap_pct = (class_target - current_class) / class_target
-                if seg_weights is None:
-                    segment_target = class_target / Decimal(
-                        max(len(distinct_segments), 1)
-                    )
-                else:
-                    segment_target = (
-                        class_target * seg_weights.get(position.segmento, ZERO)
-                    )
-                current_segment = segment_after_orders.get(
-                    (classe, position.segmento), ZERO
-                )
-                segment_gap_pct = (
-                    (segment_target - current_segment) / segment_target
-                    if segment_target > ZERO
-                    else ZERO
-                )
-                current_asset = _portfolio_value(position) + costs_by_ticker.get(
-                    position.ticker, ZERO
-                )
-                candidates.append(
-                    (-class_gap_pct, -segment_gap_pct, current_asset, position.ticker)
-                )
-                incremental_costs[position.ticker] = incremental_cost
-
-        if not candidates:
-            break
-        _, _, _, selected_ticker = min(candidates)
-        selected = position_by_ticker[selected_ticker]
-        orders_by_ticker[selected_ticker] = (
-            orders_by_ticker.get(selected_ticker, ZERO) + Decimal("1")
-        )
-        costs_by_ticker[selected_ticker] = (
-            costs_by_ticker.get(selected_ticker, ZERO)
-            + incremental_costs[selected_ticker]
-        )
-        total_alocado = _money(sum(costs_by_ticker.values(), ZERO))
-        troco = _money(aporte - total_alocado)
-
-    order_results: list[OrderCalculation] = []
-    for ticker in sorted(orders_by_ticker):
-        position = position_by_ticker[ticker]
-        quantity = orders_by_ticker[ticker]
-        total = _money(costs_by_ticker[ticker])
-        assessment = request.semaforos.get(ticker)
-        prior_quantity = position.quantidade
-        prior_cost = prior_quantity * position.preco_medio
-        projected_quantity = prior_quantity + quantity
-        projected_average = (
-            _money((prior_cost + total) / projected_quantity)
-            if projected_quantity > ZERO
-            else _money(position.preco_medio)
-        )
-        order_results.append(
-            OrderCalculation(
-                ticker=ticker,
-                classe=position.classe,
-                segmento=position.segmento,
-                preco_atual=position.preco_atual,
-                qtd_calculada=quantity,
-                total_estimado=total,
-                pm_anterior=_money(position.preco_medio),
-                pm_projetado=projected_average,
-                semaforo=assessment.semaforo if assessment is not None else None,
-                gatilhos_disparados=(
-                    assessment.regras_acionadas if assessment is not None else []
-                ),
-            )
-        )
-
-    allocated_by_class: dict[str, Decimal] = {}
-    for ticker, cost in costs_by_ticker.items():
-        classe = position_by_ticker[ticker].classe
-        allocated_by_class[classe] = allocated_by_class.get(classe, ZERO) + cost
-
-    class_summaries: list[ClassAllocationSummary] = []
-    classes_to_summarize = sorted(set(request.metas_classe) | set(class_current))
-    for classe in classes_to_summarize:
-        meta = request.metas_classe.get(classe, ZERO)
-        target = total_target_patrimony * meta
-        current = class_current.get(classe, ZERO)
-        after = current + allocated_by_class.get(classe, ZERO)
-        class_summaries.append(
-            ClassAllocationSummary(
-                classe=classe,
-                meta_pct=(meta * Decimal("100")).quantize(
-                    CENT, rounding=ROUND_HALF_UP
-                ),
-                atual_pct=_percentage(current, patrimonio_atual),
-                gap_brl=_money(target - current),
-                aportado_brl=_money(allocated_by_class.get(classe, ZERO)),
-                depois_pct=_percentage(after, patrimonio_atual + total_alocado),
-            )
-        )
-
-    blocked_results = [
-        BlockedAssetInfo(
-            ticker=position.ticker,
-            classe=position.classe,
-            segmento=position.segmento,
-            semaforo=(
-                request.semaforos[position.ticker].semaforo
-                if position.ticker in request.semaforos
+        explicit_weights: dict[str, Decimal] = {}
+        has_explicit_weights = False
+        for position in group:
+            configured = configured_assets.get(position.ticker)
+            weight = (
+                position.meta_alocacao_pct
+                if position.meta_alocacao_pct is not None
+                else configured.meta_alocacao_pct
+                if configured is not None
                 else None
-            ),
-            motivos=blocked_by_ticker[position.ticker],
-        )
-        for position in positions
-        if blocked_by_ticker.get(position.ticker)
-    ]
+            )
+            if weight is not None:
+                has_explicit_weights = True
+                explicit_weights[position.ticker] = weight
+        if has_explicit_weights:
+            asset_weights = [
+                (position.ticker, explicit_weights.get(position.ticker, Decimal("0")))
+                for position in group
+            ]
+        else:
+            asset_weights = [
+                (position.ticker, current_values[position.ticker])
+                for position in group
+            ]
 
-    if total_alocado + troco != aporte:
-        raise ArithmeticError("a simulação não preservou o aporte disponível")
+        if not any(weight > 0 for _, weight in asset_weights):
+            for position in group:
+                exclusions.append(
+                    ExcludedAsset(
+                        ticker=position.ticker,
+                        classe=position.classe,
+                        motivo="Não há peso explícito nem posição atual para distribuir o aporte.",
+                    )
+                )
+            continue
+
+        asset_budgets = _split_cents(class_budget, asset_weights)
+        for position in sorted(group, key=lambda item: item.ticker):
+            budget = asset_budgets.get(position.ticker, Decimal("0.00"))
+            assessment = assessments[position.ticker]
+            rules = assessment.regras_acionadas if assessment else []
+            if assessment is not None and assessment.semaforo == "AMARELO":
+                remaining_factor = (
+                    Decimal("100") - policy.reducao_semaforo_amarelo_pct
+                ) / Decimal("100")
+                budget = _money(budget * remaining_factor)
+
+            treasury = position.classe == "Tesouro"
+            quantity = _order_quantity(budget, position.preco_atual, treasury)
+            if quantity <= 0:
+                if budget > 0:
+                    exclusions.append(
+                        ExcludedAsset(
+                            ticker=position.ticker,
+                            classe=position.classe,
+                            motivo=(
+                                "Aporte distribuído abaixo da unidade mínima ou "
+                                "do mínimo de R$ 30,00 do Tesouro Direto."
+                            ),
+                            semaforo=assessment.semaforo if assessment else None,
+                            regras_acionadas=rules,
+                        )
+                    )
+                continue
+
+            estimated_total = _money(quantity * position.preco_atual)
+            new_quantity = position.quantidade + quantity
+            projected_average = (
+                None
+                if position.preco_medio is None
+                else (
+                    position.quantidade * position.preco_medio
+                    + quantity * position.preco_atual
+                )
+                / new_quantity
+            )
+            source_page = None
+            facts = request.fii_facts.get(position.ticker)
+            if facts and position.classe == "FIIs":
+                source_page = facts.pagina_indicadores_imobiliarios
+            orders.append(
+                CalculatedOrder(
+                    ticker=position.ticker,
+                    classe=position.classe,
+                    segmento=position.segmento,
+                    preco_atual=position.preco_atual,
+                    quantidade_calculada=quantity,
+                    total_estimado=estimated_total,
+                    preco_medio_atual=position.preco_medio,
+                    preco_medio_projetado=(
+                        projected_average.quantize(
+                            FOUR_PLACES, rounding=ROUND_HALF_UP
+                        )
+                        if projected_average is not None
+                        else None
+                    ),
+                    semaforo=assessment.semaforo if assessment else None,
+                    regras_acionadas=rules,
+                    pagina_fonte=source_page,
+                )
+            )
+            order_values_by_class[asset_class] = (
+                order_values_by_class.get(asset_class, Decimal("0.00"))
+                + estimated_total
+            )
+
+    allocated = _money(
+        sum((order.total_estimado for order in orders), Decimal("0.00"))
+    )
+    residual = _money(contribution - allocated)
+    if residual < 0:
+        raise ArithmeticError("O total alocado excedeu o aporte disponível.")
+
+    total_after = current_total + allocated
+    class_comparison: list[ClassComparison] = []
+    for asset_class, target_weight in sorted(policy.metas_classe.items()):
+        class_current = current_by_class.get(asset_class, Decimal("0.00"))
+        class_after = class_current + order_values_by_class.get(
+            asset_class, Decimal("0.00")
+        )
+        before_pct = (
+            _percentage(class_current / current_total * Decimal("100"))
+            if current_total > 0
+            else Decimal("0.0000")
+        )
+        after_pct = (
+            _percentage(class_after / post_contribution_total * Decimal("100"))
+            if post_contribution_total > 0
+            else Decimal("0.0000")
+        )
+        class_comparison.append(
+            ClassComparison(
+                classe=asset_class,
+                patrimonio_atual_brl=_money(class_current),
+                meta_pct=_percentage(target_weight * Decimal("100")),
+                percentual_atual=before_pct,
+                percentual_depois=after_pct,
+            )
+        )
+
+    efficiency = (
+        _percentage(allocated / contribution * Decimal("100"))
+        if contribution > 0
+        else Decimal("0.0000")
+    )
     return SimulationResult(
-        patrimonio_atual=patrimonio_atual,
-        aporte_disponivel=aporte,
-        total_alocado=total_alocado,
-        troco_residual=troco,
-        eficiencia_pct=_percentage(total_alocado, aporte),
-        ordens=order_results,
-        resumo_classes=class_summaries,
-        ativos_bloqueados=blocked_results,
+        patrimonio_atual_brl=_money(current_total),
+        aporte_disponivel=contribution,
+        total_alocado=allocated,
+        troco_residual=residual,
+        eficiencia_aporte_pct=efficiency,
+        comparativo_classes=class_comparison,
+        ordens=orders,
+        ativos_excluidos=exclusions,
     )

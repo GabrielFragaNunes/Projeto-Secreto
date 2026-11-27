@@ -1,99 +1,168 @@
-import { NextResponse } from "next/server";
+import { engineApiUrl, readEngineError } from "@/lib/engine-api";
+import { getSupabaseRequestContext } from "@/lib/supabase/request";
+import {
+  parseUserPosition,
+  type UserPositionInput,
+} from "@/lib/supabase/positions";
+import { persistUserPositions } from "@/lib/supabase/persist-positions";
+import { hasAcceptedCurrentTerms } from "@/lib/supabase/terms-server";
 
-const ENGINE_API_URL = (
-  process.env.ENGINE_API_URL || "http://localhost:8000"
-).replace(/\/+$/, "");
-const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
-
-type JsonRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function readJsonResponse(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text) return null;
-
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return { detail: text };
-  }
-}
-
-function upstreamDetail(payload: unknown): string | undefined {
-  if (!isRecord(payload)) return undefined;
-  if (typeof payload.detail === "string") return payload.detail;
-  if (Array.isArray(payload.detail)) {
-    const messages = payload.detail.flatMap((item) =>
-      isRecord(item) && typeof item.msg === "string" ? [item.msg] : [],
-    );
-    return messages.length > 0 ? messages.join("; ") : undefined;
-  }
-  return undefined;
-}
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
 export async function POST(request: Request) {
-  const formData = await request.formData();
-  const file = formData.get("file");
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch (error) {
+    if (error instanceof TypeError) {
+      return Response.json(
+        { error: "Envie o arquivo como multipart/form-data." },
+        { status: 400 }
+      );
+    }
+    throw error;
+  }
 
+  const file = formData.get("file");
   if (!(file instanceof File)) {
-    return NextResponse.json(
-      { error: "Selecione um arquivo .xlsx para importar." },
-      { status: 400 },
+    return Response.json(
+      { error: "Selecione uma planilha XLSX para importar." },
+      { status: 400 }
     );
   }
   if (!file.name.toLowerCase().endsWith(".xlsx")) {
-    return NextResponse.json(
-      { error: "O arquivo enviado deve ter extensão .xlsx." },
-      { status: 415 },
+    return Response.json(
+      { error: "O arquivo deve ter extensão .xlsx." },
+      { status: 415 }
     );
   }
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    return NextResponse.json(
-      { error: "A planilha deve ter no máximo 5 MB." },
-      { status: 413 },
+  if (file.size > MAX_FILE_BYTES) {
+    return Response.json(
+      { error: "A planilha não pode exceder 5 MB." },
+      { status: 413 }
     );
   }
 
-  const engineFormData = new FormData();
-  engineFormData.append("file", file, file.name);
-
+  const forwarded = new FormData();
+  forwarded.append("file", file, file.name);
+  let response: Response;
   try {
-    const response = await fetch(`${ENGINE_API_URL}/v1/import/xlsx`, {
+    response = await fetch(engineApiUrl("/v1/import/xlsx"), {
       method: "POST",
-      body: engineFormData,
+      body: forwarded,
       cache: "no-store",
     });
-    const payload = await readJsonResponse(response);
-
-    if (response.status === 422) {
-      return NextResponse.json(
+  } catch (error) {
+    if (error instanceof TypeError) {
+      return Response.json(
         {
-          error: "A planilha não corresponde ao formato esperado.",
-          details: upstreamDetail(payload),
+          error:
+            "O motor de importação está indisponível. Verifique se a API está em execução.",
         },
-        { status: 422 },
+        { status: 503 }
       );
     }
-    if (response.status >= 500) {
-      return NextResponse.json(
-        { error: "O motor de carteira está indisponível. Tente novamente." },
-        { status: 503 },
+    throw error;
+  }
+
+  if (!response.ok) {
+    const message = await readEngineError(
+      response,
+      "Não foi possível importar a planilha."
+    );
+    return Response.json({ error: message }, { status: response.status });
+  }
+
+  let imported: unknown;
+  try {
+    imported = await response.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return Response.json(
+        { error: "O motor retornou uma resposta inválida para a planilha." },
+        { status: 502 }
       );
     }
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: "O motor não conseguiu processar a planilha." },
-        { status: 502 },
-      );
-    }
-    return NextResponse.json(payload, { status: response.status });
-  } catch {
-    return NextResponse.json(
-      { error: "O motor de carteira está indisponível. Tente novamente." },
-      { status: 503 },
+    throw error;
+  }
+  if (!isRecord(imported) || !Array.isArray(imported.positions)) {
+    return Response.json(
+      { error: "O motor retornou dados inválidos para a planilha." },
+      { status: 502 }
     );
   }
+
+  const parsedPositions = imported.positions.map(parseUserPosition);
+  if (parsedPositions.some((position) => position === null)) {
+    return Response.json(
+      { error: "A planilha contém posições incompatíveis com o cadastro." },
+      { status: 422 }
+    );
+  }
+  const positions = parsedPositions.filter(
+    (position): position is UserPositionInput => position !== null
+  );
+  const tickerSet = new Set(positions.map((position) => position.ticker));
+  if (tickerSet.size !== positions.length) {
+    return Response.json(
+      {
+        error:
+          "A planilha contém tickers repetidos. Consolide as linhas duplicadas e tente novamente.",
+      },
+      { status: 422 }
+    );
+  }
+
+  const context = await getSupabaseRequestContext();
+  if (context.kind === "unconfigured") {
+    return Response.json({ ...imported, persistence: { enabled: false } });
+  }
+  if (context.kind === "unauthenticated") {
+    return Response.json(
+      { error: "Entre para importar e salvar suas posições." },
+      { status: 401 }
+    );
+  }
+  const terms = await hasAcceptedCurrentTerms(context.supabase, context.user);
+  if (terms.error) {
+    console.error(
+      "Falha ao verificar os termos antes da importação:",
+      terms.error
+    );
+    return Response.json(
+      { error: "Não foi possível verificar o aceite regulatório." },
+      { status: 500 }
+    );
+  }
+  if (!terms.accepted) {
+    return Response.json(
+      {
+        error:
+          "Confirme os termos de primeiro acesso antes de importar posições.",
+      },
+      { status: 403 }
+    );
+  }
+
+  const persisted = await persistUserPositions(
+    context.supabase,
+    context.user,
+    positions
+  );
+  if (persisted.error) {
+    console.error("Falha ao persistir posições importadas:", persisted.error);
+    return Response.json(
+      { error: "Não foi possível salvar as posições importadas." },
+      { status: 500 }
+    );
+  }
+  return Response.json({
+    ...imported,
+    positions: persisted.positions,
+    persistence: { enabled: true },
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

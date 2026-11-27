@@ -1,40 +1,49 @@
-import re
-from typing import Any
+from collections.abc import Iterator
 
+from fastapi.testclient import TestClient
 
-PROHIBITED_TERMS = re.compile(
-    r"\b(?:compre|venda|recomendamos|sugerimos|oportunidade|barato|carteira\s+recomendada)\b",
-    re.IGNORECASE,
+from app.main import app
+
+client = TestClient(app)
+PROHIBITED_TERMS = (
+    "compre",
+    "venda",
+    "recomendamos",
+    "sugerimos",
+    "oportunidade",
+    "barato",
+    "carteira recomendada",
 )
 
 
-def _response_strings(value: Any) -> list[str]:
+def _strings(value: object) -> Iterator[str]:
     if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [
-            item
-            for nested in value.values()
-            for item in _response_strings(nested)
-        ]
-    if isinstance(value, list):
-        return [item for nested in value for item in _response_strings(nested)]
-    return []
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
 
 
-def test_aporte_simulation_response_has_no_prescriptive_language(
-    api_client,
-    reference_simulation_payload,
-) -> None:
-    response = api_client.post(
+def test_simulation_response_contains_only_descriptive_language() -> None:
+    response = client.post(
         "/v1/aporte/simular",
-        json=reference_simulation_payload,
+        json={
+            "positions": [
+                {
+                    "ticker": "PETR4",
+                    "classe": "Ações",
+                    "quantidade": 1,
+                    "preco_medio": 10,
+                    "preco_atual": 10,
+                }
+            ],
+            "policy": {"metas_classe": {"Ações": 1}},
+            "aporte_disponivel": 50,
+        },
     )
-
     assert response.status_code == 200
-    matches = [
-        match.group(0)
-        for text in _response_strings(response.json())
-        for match in PROHIBITED_TERMS.finditer(text)
-    ]
-    assert matches == []
+    response_strings = " ".join(_strings(response.json())).casefold()
+    assert not any(term in response_strings for term in PROHIBITED_TERMS)

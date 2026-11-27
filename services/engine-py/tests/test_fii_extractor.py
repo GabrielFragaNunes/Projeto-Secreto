@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from app.ai.fii_extractor import (
     clear_extractor_caches,
     extract_fii_report,
 )
+from app.ai import fii_extractor
 from app.api import routes
 from app.domain.fii_risk import SemaphoreThresholds, avaliar_semaforo_fii
 from app.main import app
@@ -101,6 +103,41 @@ def test_extraction_deduplicates_by_sha256_and_overwrites_model_hash(
     assert call.kwargs["config"].response_mime_type == "application/json"
     assert call.kwargs["config"].response_schema is FiiReportExtraction
     assert fake_client.caches.create.call_args.kwargs["config"].system_instruction == SYSTEM_INSTRUCTION
+
+
+def test_extraction_cache_expires_and_refreshes_context_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [0.0]
+    monkeypatch.setattr(fii_extractor.time, "monotonic", lambda: now[0])
+    fake_client = make_gemini_client(report_payload())
+
+    extract_fii_report(PDF_BYTES, client=fake_client)
+    now[0] += fii_extractor.PDF_CACHE_TTL_SECONDS + 1
+    extract_fii_report(PDF_BYTES, client=fake_client)
+
+    assert fake_client.files.upload.call_count == 2
+    assert fake_client.caches.create.call_count == 2
+    assert fake_client.models.generate_content.call_count == 2
+
+
+def test_parallel_requests_for_same_pdf_share_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_MODEL", "test-model")
+    fake_client = make_gemini_client(report_payload())
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        reports = list(
+            executor.map(
+                lambda _: extract_fii_report(PDF_BYTES, client=fake_client),
+                range(4),
+            )
+        )
+
+    assert all(report.hash_pdf_sha256 == PDF_HASH for report in reports)
+    fake_client.files.upload.assert_called_once()
+    fake_client.models.generate_content.assert_called_once()
 
 
 def test_pydantic_schema_validates_required_pages_and_excludes_python_assessment() -> None:
@@ -233,7 +270,7 @@ def test_endpoint_returns_python_assessment_with_numeric_json_values(
     monkeypatch.setattr(
         routes,
         "extract_fii_report",
-        lambda pdf_bytes: FiiReportExtraction.model_validate_json(
+        lambda _pdf_bytes: FiiReportExtraction.model_validate_json(
             json.dumps(report_payload())
         ),
     )

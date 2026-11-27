@@ -4,10 +4,13 @@ import logging
 import os
 import threading
 import time
+from collections import OrderedDict
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
-from typing import Annotated, Any
+from typing import Annotated, Any, Generator, Generic, TypeVar
 
 from google import genai
 from google.genai.errors import APIError
@@ -43,6 +46,7 @@ EXTRACTION_PROMPT = (
 DEFAULT_MODEL = "gemini-2.5-flash"
 PDF_CACHE_TTL_SECONDS = 3600
 PDF_CACHE_REUSE_MARGIN_SECONDS = 60
+CACHE_MAX_ENTRIES = 128
 
 
 class _DecimalJsonNumber:
@@ -153,15 +157,76 @@ class FiiReportExtraction(StrictModel):
     fatos_relevantes: list[FatoRelevante]
 
 
-class _PdfCacheEntry:
-    def __init__(self, name: str, expires_at: float) -> None:
-        self.name = name
-        self.expires_at = expires_at
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class _CacheEntry(Generic[T]):
+    value: T
+    expires_at: float
+
+
+class _KeyedLocks:
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._entries: dict[tuple[str, str], tuple[threading.Lock, int]] = {}
+
+    @contextmanager
+    def hold(self, key: tuple[str, str]) -> Generator[None, None, None]:
+        with self._guard:
+            entry = self._entries.get(key)
+            lock, users = entry if entry is not None else (threading.Lock(), 0)
+            self._entries[key] = (lock, users + 1)
+
+        acquired = False
+        try:
+            lock.acquire()
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                lock.release()
+            with self._guard:
+                current_lock, users = self._entries[key]
+                if users == 1:
+                    del self._entries[key]
+                else:
+                    self._entries[key] = (current_lock, users - 1)
 
 
 _CACHE_LOCK = threading.RLock()
-_PDF_CACHE: dict[tuple[str, str], _PdfCacheEntry] = {}
-_EXTRACTION_CACHE: dict[tuple[str, str], FiiReportExtraction] = {}
+_PDF_CACHE_LOCKS = _KeyedLocks()
+_EXTRACTION_LOCKS = _KeyedLocks()
+_PDF_CACHE: OrderedDict[tuple[str, str], _CacheEntry[str]] = OrderedDict()
+_EXTRACTION_CACHE: OrderedDict[
+    tuple[str, str], _CacheEntry[FiiReportExtraction]
+] = OrderedDict()
+
+
+def _remove_expired_entries(
+    cache: OrderedDict[tuple[str, str], _CacheEntry[Any]],
+    now: float,
+) -> None:
+    expired_keys = [
+        key for key, entry in cache.items() if entry.expires_at <= now
+    ]
+    for key in expired_keys:
+        del cache[key]
+
+
+def _store_cache_entry(
+    cache: OrderedDict[tuple[str, str], _CacheEntry[Any]],
+    key: tuple[str, str],
+    value: Any,
+    *,
+    ttl_seconds: int,
+) -> None:
+    now = time.monotonic()
+    _remove_expired_entries(cache, now)
+    cache[key] = _CacheEntry(value=value, expires_at=now + ttl_seconds)
+    cache.move_to_end(key)
+    while len(cache) > CACHE_MAX_ENTRIES:
+        cache.popitem(last=False)
 
 
 class GeminiApiKeyMissingError(RuntimeError):
@@ -195,16 +260,20 @@ def create_or_reuse_pdf_cache(
 ) -> str | None:
     pdf_hash = _get_pdf_hash(pdf_bytes)
     model_name = _resolve_model(model)
-    gemini_client = client or _create_client()
     cache_key = (model_name, pdf_hash)
 
-    with _CACHE_LOCK:
-        existing = _PDF_CACHE.get(cache_key)
-        if existing and existing.expires_at > (
-            time.monotonic() + PDF_CACHE_REUSE_MARGIN_SECONDS
-        ):
-            return existing.name
+    with _PDF_CACHE_LOCKS.hold(cache_key):
+        now = time.monotonic()
+        with _CACHE_LOCK:
+            _remove_expired_entries(_PDF_CACHE, now)
+            existing = _PDF_CACHE.get(cache_key)
+            if existing and existing.expires_at > (
+                now + PDF_CACHE_REUSE_MARGIN_SECONDS
+            ):
+                _PDF_CACHE.move_to_end(cache_key)
+                return existing.value
 
+        gemini_client = client or _create_client()
         file_buffer = BytesIO(pdf_bytes)
         file_buffer.name = f"fii-report-{pdf_hash}.pdf"
         try:
@@ -233,12 +302,14 @@ def create_or_reuse_pdf_cache(
         if not cached_content.name:
             raise GeminiExtractionError("A API Gemini não retornou o identificador do cache.")
 
-        cache_entry = _PdfCacheEntry(
-            cached_content.name,
-            time.monotonic() + PDF_CACHE_TTL_SECONDS,
-        )
-        _PDF_CACHE[cache_key] = cache_entry
-        return cache_entry.name
+        with _CACHE_LOCK:
+            _store_cache_entry(
+                _PDF_CACHE,
+                cache_key,
+                cached_content.name,
+                ttl_seconds=PDF_CACHE_TTL_SECONDS,
+            )
+        return cached_content.name
 
 
 def _parse_response(response: Any) -> FiiReportExtraction:
@@ -273,14 +344,18 @@ def extract_fii_report(
 ) -> FiiReportExtraction:
     pdf_hash = _get_pdf_hash(pdf_bytes)
     model_name = _resolve_model(model)
-    gemini_client = client or _create_client()
     extraction_key = (model_name, pdf_hash)
 
-    with _CACHE_LOCK:
-        cached_report = _EXTRACTION_CACHE.get(extraction_key)
-        if cached_report is not None:
-            return cached_report.model_copy(deep=True)
+    with _EXTRACTION_LOCKS.hold(extraction_key):
+        now = time.monotonic()
+        with _CACHE_LOCK:
+            _remove_expired_entries(_EXTRACTION_CACHE, now)
+            cached_entry = _EXTRACTION_CACHE.get(extraction_key)
+            if cached_entry is not None:
+                _EXTRACTION_CACHE.move_to_end(extraction_key)
+                return cached_entry.value.model_copy(deep=True)
 
+        gemini_client = client or _create_client()
         cached_content_name = create_or_reuse_pdf_cache(
             pdf_bytes,
             client=gemini_client,
@@ -309,7 +384,13 @@ def extract_fii_report(
         report = _parse_response(response).model_copy(
             update={"hash_pdf_sha256": pdf_hash}
         )
-        _EXTRACTION_CACHE[extraction_key] = report
+        with _CACHE_LOCK:
+            _store_cache_entry(
+                _EXTRACTION_CACHE,
+                extraction_key,
+                report,
+                ttl_seconds=PDF_CACHE_TTL_SECONDS,
+            )
         return report.model_copy(deep=True)
 
 

@@ -10,8 +10,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 from google.genai.errors import APIError
-from openpyxl.utils.exceptions import InvalidFileException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ValidationError
 
 from app.ai.fii_extractor import (
     FiiReportExtraction,
@@ -19,21 +18,29 @@ from app.ai.fii_extractor import (
     GeminiExtractionError,
     extract_fii_report,
 )
+from app.ai.macro_explainer import (
+    MacroExplainRequest,
+    MacroExplanation,
+    MacroExplanationError,
+    MacroGeminiApiKeyMissingError,
+    explain_macro,
+)
 from app.domain.fii_risk import (
     FiiSemaphoreAssessment,
     SemaphoreThresholds,
     avaliar_semaforo_fii,
 )
-from app.domain.models import (
-    ImportXlsxResult,
-    PositionItem,
-    RebalancePolicy,
-    RebalanceRequest,
+from app.domain.rebalance import (
+    SimulationRequest,
     SimulationResult,
+    simulate_contribution,
 )
-from app.domain.numeric import StrictDecimal
-from app.domain.rebalance import calcular_rebalanceamento
-from app.parsers.b3_xlsx import parse_b3_xlsx
+from app.integrations.bcb_olinda import (
+    BCBFocusUnavailableError,
+    MacroFocusSnapshot,
+    get_macro_focus_snapshot,
+)
+from app.parsers.b3_xlsx import B3XlsxParseError, parse_b3_xlsx
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -173,37 +180,84 @@ async def extrair_relatorio_fii(
     return DecimalJSONResponse(content=payload)
 
 
-@router.post(
-    "/v1/import/xlsx",
-    response_model=ImportXlsxResult,
+@router.get(
+    "/v1/macro/focus",
+    response_model=MacroFocusSnapshot,
     response_class=DecimalJSONResponse,
 )
-async def importar_carteira_xlsx(file: UploadFile = File(...)) -> Response:
+async def obter_focus_macro() -> Response:
+    try:
+        snapshot = await run_in_threadpool(get_macro_focus_snapshot)
+    except BCBFocusUnavailableError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="As expectativas do Banco Central estão temporariamente indisponíveis.",
+        ) from error
+    return DecimalJSONResponse(content=snapshot)
+
+
+@router.post(
+    "/v1/macro/explicar",
+    response_model=MacroExplanation,
+)
+async def explicar_impacto_macro(payload: MacroExplainRequest) -> MacroExplanation:
+    snapshot = payload.snapshot
+    if snapshot is None:
+        try:
+            snapshot = await run_in_threadpool(get_macro_focus_snapshot)
+        except BCBFocusUnavailableError as error:
+            raise HTTPException(
+                status_code=503,
+                detail="As expectativas do Banco Central estão temporariamente indisponíveis.",
+            ) from error
+
+    try:
+        return await run_in_threadpool(
+            explain_macro,
+            snapshot,
+            payload.distribuicao_por_classe,
+        )
+    except MacroGeminiApiKeyMissingError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except APIError as error:
+        logger.exception("Falha na API Gemini ao gerar leitura macroeconômica.")
+        raise HTTPException(
+            status_code=502,
+            detail="O serviço de explicação macroeconômica não concluiu o processamento.",
+        ) from error
+    except MacroExplanationError as error:
+        logger.exception("Resposta Gemini inválida para leitura macroeconômica.")
+        raise HTTPException(
+            status_code=502,
+            detail="A resposta do serviço não corresponde ao contrato educativo.",
+        ) from error
+
+
+@router.post(
+    "/v1/import/xlsx",
+    response_class=DecimalJSONResponse,
+)
+async def importar_planilha_b3(file: UploadFile = File(...)) -> Response:
     filename = file.filename or ""
     if not filename.lower().endswith(".xlsx"):
         raise HTTPException(
             status_code=415,
-            detail="O arquivo enviado deve ter extensão .xlsx.",
+            detail="O arquivo enviado deve usar a extensão .xlsx.",
         )
+    if file.content_type not in (
+        None,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/octet-stream",
+    ):
+        raise HTTPException(status_code=415, detail="O tipo de conteúdo deve ser XLSX.")
 
-    xlsx_bytes = await file.read(MAX_XLSX_SIZE_BYTES + 1)
-    if len(xlsx_bytes) > MAX_XLSX_SIZE_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail="O arquivo XLSX excede o limite de 5 MB.",
-        )
-    if not xlsx_bytes:
-        raise HTTPException(status_code=400, detail="O arquivo XLSX está vazio.")
-
+    content = await file.read(MAX_XLSX_SIZE_BYTES + 1)
+    if len(content) > MAX_XLSX_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="A planilha excede o limite de 5 MB.")
     try:
-        result = await run_in_threadpool(parse_b3_xlsx, xlsx_bytes)
-    except ValueError as error:
+        result = await run_in_threadpool(parse_b3_xlsx, content)
+    except B3XlsxParseError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    except (BadZipFile, InvalidFileException) as error:
-        raise HTTPException(
-            status_code=422,
-            detail="O conteúdo enviado não é uma planilha XLSX válida.",
-        ) from error
     return DecimalJSONResponse(content=result)
 
 
@@ -212,38 +266,6 @@ async def importar_carteira_xlsx(file: UploadFile = File(...)) -> Response:
     response_model=SimulationResult,
     response_class=DecimalJSONResponse,
 )
-async def simular_aporte(payload: AporteSimulationInput) -> Response:
-    policy = payload.policy
-    assessments: dict[str, FiiSemaphoreAssessment] = {}
-    for ticker, facts in (payload.fii_facts or {}).items():
-        assessments[ticker] = avaliar_semaforo_fii(
-            vacancia_fisica_pct=facts.indicadores_imobiliarios.vacancia_fisica_pct,
-            vacancia_financeira_pct=facts.indicadores_imobiliarios.vacancia_financeira_pct,
-            pagina_indicadores_imobiliarios=(
-                facts.indicadores_imobiliarios.pagina_fonte
-            ),
-            alavancagem_indicada=facts.alavancagem.indicada,
-            alavancagem_pct=facts.alavancagem.percentual_sobre_patrimonio,
-            pagina_alavancagem=facts.alavancagem.pagina_fonte,
-            thresholds=policy.gatilhos_semaforo_fii,
-        )
-
-    blocked_tickers = set(policy.ativos_bloqueados_manualmente)
-    blocked_tickers.update(
-        configured.ticker
-        for configured in policy.ativos_configurados
-        if configured.elegivel is False
-    )
-    rebalance_request = RebalanceRequest(
-        positions=payload.positions,
-        aporte_disponivel=payload.aporte_disponivel,
-        metas_classe=policy.metas_classe,
-        metas_segmento=policy.metas_segmento,
-        ativos_bloqueados_manualmente=blocked_tickers,
-        semaforos=assessments,
-        acao_semaforo_vermelho=policy.acao_semaforo_vermelho,
-        fator_reducao_amarelo=policy.fator_reducao_amarelo,
-        minimo_tesouro_direto=policy.minimo_tesouro_direto,
-    )
-    result = calcular_rebalanceamento(rebalance_request)
+async def simular_aporte(payload: SimulationRequest) -> Response:
+    result = simulate_contribution(payload)
     return DecimalJSONResponse(content=result)
