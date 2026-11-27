@@ -1,19 +1,36 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.domain.numeric import StrictDecimal
 
 
 class SemaphoreThresholds(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    vacancia_fisica_max_pct: Decimal = Field(
+    vacancia_fisica_max_pct: StrictDecimal | None = Field(
         default=Decimal("25"), ge=Decimal("0"), le=Decimal("100")
     )
-    vacancia_financeira_max_pct: Decimal = Field(
+    vacancia_financeira_amarelo_pct: StrictDecimal | None = Field(
+        default=None, ge=Decimal("0"), le=Decimal("100")
+    )
+    vacancia_financeira_max_pct: StrictDecimal = Field(
         default=Decimal("25"), ge=Decimal("0"), le=Decimal("100")
     )
-    alavancagem_max_pct: Decimal | None = Field(default=None, ge=Decimal("0"))
+    alavancagem_max_pct: StrictDecimal | None = Field(default=None, ge=Decimal("0"))
+
+    @model_validator(mode="after")
+    def validate_financial_vacancy_thresholds(self) -> "SemaphoreThresholds":
+        if (
+            self.vacancia_financeira_amarelo_pct is not None
+            and self.vacancia_financeira_amarelo_pct
+            > self.vacancia_financeira_max_pct
+        ):
+            raise ValueError(
+                "o limiar amarelo de vacância financeira não pode exceder o vermelho"
+            )
+        return self
 
 
 class FiiSemaphoreAssessment(BaseModel):
@@ -34,6 +51,7 @@ def avaliar_semaforo_fii(
     thresholds: SemaphoreThresholds,
 ) -> FiiSemaphoreAssessment:
     gatilhos_vermelhos: list[str] = []
+    gatilhos_amarelos: list[str] = []
     dados_indisponiveis: list[str] = []
 
     vacancy_metrics = (
@@ -49,6 +67,8 @@ def avaliar_semaforo_fii(
         ),
     )
     for nome, valor, limite in vacancy_metrics:
+        if limite is None:
+            continue
         if valor is None:
             dados_indisponiveis.append(
                 f"{nome} ausente no relatório (p. {pagina_indicadores_imobiliarios})"
@@ -56,6 +76,16 @@ def avaliar_semaforo_fii(
         elif valor > limite:
             gatilhos_vermelhos.append(
                 f"{nome}={valor}% acima do limite configurado de {limite}% "
+                f"(p. {pagina_indicadores_imobiliarios})"
+            )
+        elif (
+            nome == "vacancia_financeira_pct"
+            and thresholds.vacancia_financeira_amarelo_pct is not None
+            and valor > thresholds.vacancia_financeira_amarelo_pct
+        ):
+            gatilhos_amarelos.append(
+                f"{nome}={valor}% acima do limiar amarelo configurado de "
+                f"{thresholds.vacancia_financeira_amarelo_pct}% "
                 f"(p. {pagina_indicadores_imobiliarios})"
             )
 
@@ -77,11 +107,13 @@ def avaliar_semaforo_fii(
     if gatilhos_vermelhos:
         return FiiSemaphoreAssessment(
             semaforo="VERMELHO",
-            regras_acionadas=gatilhos_vermelhos + dados_indisponiveis,
+            regras_acionadas=(
+                gatilhos_vermelhos + gatilhos_amarelos + dados_indisponiveis
+            ),
         )
-    if dados_indisponiveis:
+    if gatilhos_amarelos or dados_indisponiveis:
         return FiiSemaphoreAssessment(
             semaforo="AMARELO",
-            regras_acionadas=dados_indisponiveis,
+            regras_acionadas=gatilhos_amarelos + dados_indisponiveis,
         )
     return FiiSemaphoreAssessment(semaforo="VERDE", regras_acionadas=[])

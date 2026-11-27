@@ -7,6 +7,7 @@ import { updateStoredPortfolio, useStoredPortfolio } from '@/lib/portfolio-stora
 import { 
   TrendingUp, PlusCircle, Trash2, Wallet, CheckCircle2, 
   Search, Loader2, Upload, FileSpreadsheet, Pencil, Check, X, Download
+  Search, Loader2, Upload, FileSpreadsheet, Pencil, Check, X, Download
 } from 'lucide-react';
 import { PortfolioItem } from '@/types';
 
@@ -229,12 +230,10 @@ export default function PortfolioManager() {
 
       await logToTerminal(`📊 Total de linhas cruas: ${rows.length}`);
 
-      setImportProgress({ current: 0, total: rows.length });
       const newItems: PortfolioItem[] = [];
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        setImportProgress({ current: i + 1, total: rows.length });
 
         if (!isRecord(row)) continue;
 

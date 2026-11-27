@@ -1,32 +1,243 @@
 [
-  {"ticker":"PVBI11","classe":"FIIs","segmento":"Lajes","quantidade":1,"preco_medio":60.00,"preco_atual":62.10},
-  {"ticker":"TGAR11","classe":"FIIs","segmento":"Desenvolvimento","quantidade":1,"preco_medio":40.00,"preco_atual":40.32,"habilitado_aporte":false},
-  {"ticker":"XPLG11","classe":"FIIs","segmento":"Logistica","quantidade":1,"preco_medio":80.00,"preco_atual":90.67},
-  {"ticker":"HSML11","classe":"FIIs","segmento":"Shopping","quantidade":1,"preco_medio":75.00,"preco_atual":78.33},
-  {"ticker":"HGLG11","classe":"FIIs","segmento":"Logistica","quantidade":1,"preco_medio":140.00,"preco_atual":147.58},
-  {"ticker":"BTLG11","classe":"FIIs","segmento":"Logistica","quantidade":1,"preco_medio":95.00,"preco_atual":97.37},
-  {"ticker":"VGIR11","classe":"FIIs","segmento":"Papel","quantidade":1,"preco_medio":9.00,"preco_atual":9.13},
-  {"ticker":"MCCI11","classe":"FIIs","segmento":"Papel","quantidade":1,"preco_medio":88.00,"preco_atual":89.90},
-  {"ticker":"SANB11","classe":"Ações","segmento":"Financeiro","quantidade":1,"preco_medio":23.00,"preco_atual":24.35},
-  {"ticker":"TAEE11","classe":"Ações","segmento":"Energia","quantidade":1,"preco_medio":38.00,"preco_atual":39.71},
-  {"ticker":"KLBN4","classe":"Ações","segmento":"Materiais","quantidade":1,"preco_medio":3.20,"preco_atual":3.49},
-  {"ticker":"AGRO3","classe":"Ações","segmento":"Agro","quantidade":1,"preco_medio":16.00,"preco_atual":16.86},
-  {"ticker":"AURE3","classe":"Ações","segmento":"Energia","quantidade":1,"preco_medio":10.00,"preco_atual":11.03},
-  {"ticker":"B3SA3","classe":"Ações","segmento":"Financeiro","quantidade":1,"preco_medio":14.00,"preco_atual":14.69},
-  {"ticker":"USIM5","classe":"Ações","segmento":"Materiais","quantidade":1,"preco_medio":5.00,"preco_atual":5.69},
-  {"ticker":"VALE3","classe":"Ações","segmento":"Materiais","quantidade":1,"preco_medio":60.00,"preco_atual":61.38},
-  {"ticker":"TESOURO-A","classe":"Tesouro","segmento":"Tesouro Direto","quantidade":1,"preco_medio":19000.00,"preco_atual":19000.00},
-  {"ticker":"TESOURO-B","classe":"Tesouro","segmento":"Tesouro Direto","quantidade":1,"preco_medio":1000.00,"preco_atual":1000.00},
-  {"ticker":"TESOURO-C","classe":"Tesouro","segmento":"Tesouro Direto","quantidade":1,"preco_medio":1000.00,"preco_atual":1000.00},
-  {"ticker":"TESOURO-D","classe":"Tesouro","segmento":"Tesouro Direto","quantidade":1,"preco_medio":1000.00,"preco_atual":1000.00},
-  {"ticker":"TESOURO-E","classe":"Tesouro","segmento":"Tesouro Direto","quantidade":1,"preco_medio":1000.00,"preco_atual":1000.00},
-  {"ticker":"TESOURO-F","classe":"Tesouro","segmento":"Tesouro Direto","quantidade":1,"preco_medio":2249.06,"preco_atual":2249.06},
-  {"ticker":"WRLD11","classe":"ETF","segmento":"Global","quantidade":1,"preco_medio":150.00,"preco_atual":153.28},
-  {"ticker":"ETF-A","classe":"ETF","segmento":"Índice","quantidade":1,"preco_medio":175.00,"preco_atual":180.00},
-  {"ticker":"ETF-B","classe":"ETF","segmento":"Índice","quantidade":1,"preco_medio":125.00,"preco_atual":130.00},
-  {"ticker":"ETF-C","classe":"ETF","segmento":"Índice","quantidade":1,"preco_medio":115.00,"preco_atual":120.00},
-  {"ticker":"VGIA11","classe":"FIAGRO","segmento":"Agro","quantidade":1,"preco_medio":9.00,"preco_atual":9.10},
-  {"ticker":"FIAGRO-A","classe":"FIAGRO","segmento":"Agro","quantidade":1,"preco_medio":9.50,"preco_atual":10.00},
-  {"ticker":"FIAGRO-B","classe":"FIAGRO","segmento":"Agro","quantidade":1,"preco_medio":12.00,"preco_atual":12.50},
-  {"ticker":"FIAGRO-C","classe":"FIAGRO","segmento":"Agro","quantidade":1,"preco_medio":15.00,"preco_atual":15.75}
+  {
+    "ticker": "PVBI11",
+    "classe": "FIIs",
+    "segmento": "Lajes",
+    "quantidade": 1,
+    "preco_medio": 60.00,
+    "preco_atual": 62.10
+  },
+  {
+    "ticker": "TGAR11",
+    "classe": "FIIs",
+    "segmento": "Desenvolvimento",
+    "quantidade": 1,
+    "preco_medio": 40.00,
+    "preco_atual": 40.32,
+    "habilitado_aporte": false
+  },
+  {
+    "ticker": "XPLG11",
+    "classe": "FIIs",
+    "segmento": "Logistica",
+    "quantidade": 1,
+    "preco_medio": 80.00,
+    "preco_atual": 90.67
+  },
+  {
+    "ticker": "HSML11",
+    "classe": "FIIs",
+    "segmento": "Shopping",
+    "quantidade": 1,
+    "preco_medio": 75.00,
+    "preco_atual": 78.33
+  },
+  {
+    "ticker": "HGLG11",
+    "classe": "FIIs",
+    "segmento": "Logistica",
+    "quantidade": 1,
+    "preco_medio": 140.00,
+    "preco_atual": 147.58
+  },
+  {
+    "ticker": "BTLG11",
+    "classe": "FIIs",
+    "segmento": "Logistica",
+    "quantidade": 1,
+    "preco_medio": 95.00,
+    "preco_atual": 97.37
+  },
+  {
+    "ticker": "VGIR11",
+    "classe": "FIIs",
+    "segmento": "Papel",
+    "quantidade": 1,
+    "preco_medio": 9.00,
+    "preco_atual": 9.13
+  },
+  {
+    "ticker": "MCCI11",
+    "classe": "FIIs",
+    "segmento": "Papel",
+    "quantidade": 1,
+    "preco_medio": 88.00,
+    "preco_atual": 89.90
+  },
+  {
+    "ticker": "SANB11",
+    "classe": "Ações",
+    "segmento": "Financeiro",
+    "quantidade": 1,
+    "preco_medio": 23.00,
+    "preco_atual": 24.35
+  },
+  {
+    "ticker": "TAEE11",
+    "classe": "Ações",
+    "segmento": "Energia",
+    "quantidade": 1,
+    "preco_medio": 38.00,
+    "preco_atual": 39.71
+  },
+  {
+    "ticker": "KLBN4",
+    "classe": "Ações",
+    "segmento": "Materiais",
+    "quantidade": 1,
+    "preco_medio": 3.20,
+    "preco_atual": 3.49
+  },
+  {
+    "ticker": "AGRO3",
+    "classe": "Ações",
+    "segmento": "Agro",
+    "quantidade": 1,
+    "preco_medio": 16.00,
+    "preco_atual": 16.86
+  },
+  {
+    "ticker": "AURE3",
+    "classe": "Ações",
+    "segmento": "Energia",
+    "quantidade": 1,
+    "preco_medio": 10.00,
+    "preco_atual": 11.03
+  },
+  {
+    "ticker": "B3SA3",
+    "classe": "Ações",
+    "segmento": "Financeiro",
+    "quantidade": 1,
+    "preco_medio": 14.00,
+    "preco_atual": 14.69
+  },
+  {
+    "ticker": "USIM5",
+    "classe": "Ações",
+    "segmento": "Materiais",
+    "quantidade": 1,
+    "preco_medio": 5.00,
+    "preco_atual": 5.69
+  },
+  {
+    "ticker": "VALE3",
+    "classe": "Ações",
+    "segmento": "Materiais",
+    "quantidade": 1,
+    "preco_medio": 60.00,
+    "preco_atual": 61.38
+  },
+  {
+    "ticker": "TESOURO-A",
+    "classe": "Tesouro",
+    "segmento": "Tesouro Direto",
+    "quantidade": 1,
+    "preco_medio": 19000.00,
+    "preco_atual": 19000.00
+  },
+  {
+    "ticker": "TESOURO-B",
+    "classe": "Tesouro",
+    "segmento": "Tesouro Direto",
+    "quantidade": 1,
+    "preco_medio": 1000.00,
+    "preco_atual": 1000.00
+  },
+  {
+    "ticker": "TESOURO-C",
+    "classe": "Tesouro",
+    "segmento": "Tesouro Direto",
+    "quantidade": 1,
+    "preco_medio": 1000.00,
+    "preco_atual": 1000.00
+  },
+  {
+    "ticker": "TESOURO-D",
+    "classe": "Tesouro",
+    "segmento": "Tesouro Direto",
+    "quantidade": 1,
+    "preco_medio": 1000.00,
+    "preco_atual": 1000.00
+  },
+  {
+    "ticker": "TESOURO-E",
+    "classe": "Tesouro",
+    "segmento": "Tesouro Direto",
+    "quantidade": 1,
+    "preco_medio": 1000.00,
+    "preco_atual": 1000.00
+  },
+  {
+    "ticker": "TESOURO-F",
+    "classe": "Tesouro",
+    "segmento": "Tesouro Direto",
+    "quantidade": 1,
+    "preco_medio": 2249.06,
+    "preco_atual": 2249.06
+  },
+  {
+    "ticker": "WRLD11",
+    "classe": "ETF",
+    "segmento": "Global",
+    "quantidade": 1,
+    "preco_medio": 150.00,
+    "preco_atual": 153.28
+  },
+  {
+    "ticker": "ETF-A",
+    "classe": "ETF",
+    "segmento": "Índice",
+    "quantidade": 1,
+    "preco_medio": 175.00,
+    "preco_atual": 180.00
+  },
+  {
+    "ticker": "ETF-B",
+    "classe": "ETF",
+    "segmento": "Índice",
+    "quantidade": 1,
+    "preco_medio": 125.00,
+    "preco_atual": 130.00
+  },
+  {
+    "ticker": "ETF-C",
+    "classe": "ETF",
+    "segmento": "Índice",
+    "quantidade": 1,
+    "preco_medio": 115.00,
+    "preco_atual": 120.00
+  },
+  {
+    "ticker": "VGIA11",
+    "classe": "FIAGRO",
+    "segmento": "Agro",
+    "quantidade": 1,
+    "preco_medio": 9.00,
+    "preco_atual": 9.10
+  },
+  {
+    "ticker": "FIAGRO-A",
+    "classe": "FIAGRO",
+    "segmento": "Agro",
+    "quantidade": 1,
+    "preco_medio": 9.50,
+    "preco_atual": 10.00
+  },
+  {
+    "ticker": "FIAGRO-B",
+    "classe": "FIAGRO",
+    "segmento": "Agro",
+    "quantidade": 1,
+    "preco_medio": 12.00,
+    "preco_atual": 12.50
+  },
+  {
+    "ticker": "FIAGRO-C",
+    "classe": "FIAGRO",
+    "segmento": "Agro",
+    "quantidade": 1,
+    "preco_medio": 15.00,
+    "preco_atual": 15.75
+  }
 ]

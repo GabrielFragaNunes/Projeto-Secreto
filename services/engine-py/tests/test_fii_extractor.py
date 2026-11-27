@@ -242,6 +242,28 @@ def test_python_semaphore_is_green_at_limit_and_yellow_when_data_is_missing() ->
     assert "(p. 7)" in missing_value.regras_acionadas[0]
 
 
+def test_python_semaphore_uses_yellow_financial_vacancy_threshold() -> None:
+    thresholds = SemaphoreThresholds(
+        vacancia_fisica_max_pct=None,
+        vacancia_financeira_amarelo_pct=Decimal("15"),
+        vacancia_financeira_max_pct=Decimal("25"),
+    )
+
+    assessment = avaliar_semaforo_fii(
+        vacancia_fisica_pct=None,
+        vacancia_financeira_pct=Decimal("20"),
+        pagina_indicadores_imobiliarios=6,
+        alavancagem_indicada=False,
+        alavancagem_pct=None,
+        pagina_alavancagem=6,
+        thresholds=thresholds,
+    )
+
+    assert assessment.semaforo == "AMARELO"
+    assert "limiar amarelo configurado de 15%" in assessment.regras_acionadas[0]
+    assert "(p. 6)" in assessment.regras_acionadas[0]
+
+
 def test_endpoint_returns_python_assessment_with_numeric_json_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

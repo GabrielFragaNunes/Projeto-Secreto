@@ -1,9 +1,10 @@
 import json
 import logging
 import uuid
-from datetime import date, datetime
 from decimal import Decimal
+from datetime import date, datetime
 from typing import Any
+from zipfile import BadZipFile
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -51,6 +52,10 @@ class FiiReportResponse(FiiReportExtraction):
     avaliacao_deterministica_usuario: FiiSemaphoreAssessment
 
 
+class FiiFactsInput(FiiReportExtraction):
+    avaliacao_deterministica_usuario: FiiSemaphoreAssessment | None = None
+
+
 class DecimalJSONResponse(Response):
     media_type = "application/json"
 
@@ -81,6 +86,28 @@ class DecimalJSONResponse(Response):
         for marker, decimal_value in decimal_values.items():
             serialized = serialized.replace(json.dumps(marker), decimal_value)
         return serialized.encode("utf-8")
+
+
+class AporteSimulationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    positions: list[PositionItem]
+    policy: RebalancePolicy
+    aporte_disponivel: StrictDecimal = Field(ge=Decimal("0"))
+    fii_facts: dict[str, FiiFactsInput] | None = None
+
+    @model_validator(mode="after")
+    def validate_fii_facts(self) -> "AporteSimulationInput":
+        tickers = [position.ticker for position in self.positions]
+        if len(tickers) != len(set(tickers)):
+            raise ValueError("cada ticker deve aparecer uma única vez na carteira")
+        if self.fii_facts is not None:
+            for ticker, facts in self.fii_facts.items():
+                if ticker != facts.ticker:
+                    raise ValueError(
+                        f"ticker da chave {ticker} difere do ticker dos fatos"
+                    )
+        return self
 
 
 @router.post(
